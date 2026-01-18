@@ -94,7 +94,7 @@ def list_subjects(profiles: Dict[str, dict]) -> List[str]:
     :param profiles: Dictionary mapping subject_id -> profile dict.
     :returns: Sorted list of subject IDs.
     """
-    return sorted(profiles.keys())
+    return sorted(profiles.keys(), key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
 
 def get_profile(profiles: Dict[str, dict], subject_id: str) -> Optional[dict]:
     """
@@ -128,7 +128,11 @@ def _discover_oh_profiles(directory: Union[str, Path]) -> List[Path]:
         raise NotADirectoryError(f"Path is not a directory: {dir_path}")
     
     # Find all files matching the OH profile pattern
-    profiles = list(dir_path.glob(f"*{_OH_PROFILE_SUFFIX}"))
+    # Exclude macOS hidden files (._*) which are metadata, not real profiles
+    profiles = [
+        p for p in dir_path.glob(f"*{_OH_PROFILE_SUFFIX}")
+        if not p.name.startswith("._")
+    ]
     
     return sorted(profiles)
 
