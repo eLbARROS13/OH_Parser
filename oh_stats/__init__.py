@@ -74,7 +74,9 @@ from .prepare import (
     get_n_observations,
     get_date_range,
     get_obs_per_subject,
-    # Generic preparation
+    # Core preparation (from pre-extracted DataFrame)
+    prepare_from_dataframe,
+    # Generic preparation (from profiles)
     prepare_sensor_data,
     # Discovery functions
     discover_sensors,
@@ -200,7 +202,9 @@ __all__ = [
     "get_n_observations",
     "get_date_range",
     "get_obs_per_subject",
-    # Generic preparation
+    # Core preparation (from pre-extracted DataFrame)
+    "prepare_from_dataframe",
+    # Generic preparation (from profiles)
     "prepare_sensor_data",
     # Discovery functions
     "discover_sensors",

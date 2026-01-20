@@ -430,7 +430,44 @@ All analysis functions expect an \textbf{AnalysisDataset} -- a standardized cont
 \end{itemize}
 \end{tcolorbox}
 
-### Prepare EMG Data (Most Common)
+### Two Ways to Prepare Data
+
+\begin{tcolorbox}[colback=tipbg, colframe=tipgreen, title={\faIcon{lightbulb} Recommended Workflow}, fonttitle=\bfseries]
+\textbf{Option A: Convenience wrappers} (simple cases)\\
+Use \texttt{prepare\_daily\_emg(profiles)} when you want standard extraction.\\[0.5em]
+\textbf{Option B: From pre-extracted DataFrame} (more control)\\
+Use \texttt{prepare\_from\_dataframe(df)} when you've already extracted data with oh\_parser and want to customize filtering/transformations.
+\end{tcolorbox}
+
+### From Pre-Extracted DataFrame (Maximum Control)
+
+If you've already extracted data with oh\_parser, use `prepare_from_dataframe()`:
+
+```python
+from oh_parser import extract_nested
+from oh_stats import prepare_from_dataframe, fit_lmm
+
+# Step 1: Extract with oh_parser (you control this)
+df = extract_nested(
+    profiles,
+    base_path="sensor_metrics.emg",
+    level_names=["date", "level", "side"],
+    value_paths=["EMG_intensity.*"],
+    flatten_values=True,
+)
+
+# Step 2: Apply your custom filtering
+df = df[df["level"] == "EMG_daily_metrics"]
+df = df.drop(columns=["level"])
+
+# Step 3: Convert to AnalysisDataset (no redundant extraction!)
+ds = prepare_from_dataframe(df, sensor="emg", side="average")
+
+# Step 4: Use oh_stats as normal
+result = fit_lmm(ds, "EMG_intensity.mean_percent_mvc")
+```
+
+### Prepare EMG Data (Convenience Wrapper)
 
 ```python
 from oh_stats import prepare_daily_emg

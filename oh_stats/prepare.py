@@ -231,11 +231,149 @@ def describe_dataset(ds: AnalysisDataset) -> str:
 
 
 # =============================================================================
-# Generic Sensor Data Preparation
+# Core DataFrame Preparation (No oh_parser dependency)
 # =============================================================================
 
 SideOption = Literal["left", "right", "both", "average"]
 
+
+def prepare_from_dataframe(
+    df: pd.DataFrame,
+    sensor: str = "unknown",
+    level: str = "daily",
+    id_col: str = "subject_id",
+    date_col: Optional[str] = "date",
+    side: SideOption = "both",
+    outcome_cols: Optional[List[str]] = None,
+    add_day_index: bool = True,
+    add_weekday: bool = True,
+) -> AnalysisDataset:
+    """
+    Prepare an already-extracted DataFrame for statistical analysis.
+    
+    Use this function when you have already extracted data using oh_parser
+    (e.g., via extract_nested() or extract_flat()) and want to convert it
+    to an AnalysisDataset for use with oh_stats modeling functions.
+    
+    This is the recommended approach for maximum flexibility, as it avoids
+    redundant data extraction and allows you to pre-process the DataFrame
+    as needed before analysis.
+    
+    :param df: DataFrame with subject data (from oh_parser or any source)
+    :param sensor: Sensor/data type name for metadata (e.g., "emg", "heart_rate")
+    :param level: Analysis level for metadata (e.g., "daily", "session", "weekly")
+    :param id_col: Column name for subject identifier (default: "subject_id")
+    :param date_col: Column name for date/time (None if no date column)
+    :param side: How to handle sides if "side" column exists:
+        - "left": Keep only left side
+        - "right": Keep only right side
+        - "both": Keep both sides as separate rows (default)
+        - "average": Average across sides (only where both exist)
+    :param outcome_cols: Specific columns to treat as outcomes (None = auto-detect)
+    :param add_day_index: Add within-subject day index (1, 2, 3, ...)
+    :param add_weekday: Add weekday name column
+    :returns: AnalysisDataset dictionary ready for oh_stats functions
+    
+    Example:
+        >>> from oh_parser import extract_nested
+        >>> from oh_stats import prepare_from_dataframe, fit_lmm
+        >>> 
+        >>> # Step 1: Extract data with oh_parser (you control this)
+        >>> df = extract_nested(
+        ...     profiles,
+        ...     base_path="sensor_metrics.emg",
+        ...     level_names=["date", "level", "side"],
+        ...     value_paths=["EMG_intensity.*"],
+        ...     flatten_values=True,
+        ... )
+        >>> 
+        >>> # Step 2: Filter/transform as needed
+        >>> df = df[df["level"] == "EMG_daily_metrics"]
+        >>> 
+        >>> # Step 3: Convert to AnalysisDataset (no redundant extraction!)
+        >>> ds = prepare_from_dataframe(df, sensor="emg", side="average")
+        >>> 
+        >>> # Step 4: Use oh_stats as normal
+        >>> result = fit_lmm(ds, "EMG_intensity.mean_percent_mvc")
+    """
+    if df.empty:
+        warnings.warn(f"Empty DataFrame provided")
+        return create_analysis_dataset(
+            data=pd.DataFrame(),
+            outcome_vars=[],
+            sensor=sensor,
+            level=level,
+        )
+    
+    df = df.copy()
+    
+    # Validate id column exists
+    if id_col not in df.columns:
+        raise ValueError(f"ID column '{id_col}' not found in DataFrame. "
+                        f"Available columns: {list(df.columns)}")
+    
+    # Parse dates if date column provided
+    if date_col and date_col in df.columns:
+        df["date"] = _parse_date_column(df[date_col])
+        if date_col != "date":
+            df = df.drop(columns=[date_col])
+        
+        # Remove rows with unparseable dates
+        n_before = len(df)
+        df = df.dropna(subset=["date"])
+        if len(df) < n_before:
+            warnings.warn(f"Dropped {n_before - len(df)} rows with unparseable dates")
+    
+    # Handle sides if present
+    grouping_vars: List[str] = []
+    if "side" in df.columns:
+        df, grouping_vars = _handle_sides(df, side)
+    
+    # Add day index (within-subject ordinal)
+    if add_day_index and "date" in df.columns:
+        df = _add_day_index(df)
+    
+    # Add weekday
+    if add_weekday and "date" in df.columns:
+        df["weekday"] = df["date"].dt.day_name()
+    
+    # Sort for reproducibility
+    sort_cols = [id_col]
+    if "date" in df.columns:
+        sort_cols.append("date")
+    if "side" in df.columns:
+        sort_cols.append("side")
+    df = df.sort_values(sort_cols).reset_index(drop=True)
+    
+    # Identify outcome columns
+    meta_cols = {id_col, "date", "side", "day_index", "weekday"}
+    if outcome_cols is None:
+        outcome_vars = [c for c in df.columns if c not in meta_cols]
+    else:
+        # Validate provided outcome columns exist
+        missing = [c for c in outcome_cols if c not in df.columns]
+        if missing:
+            warnings.warn(f"Requested outcome columns not found: {missing}")
+        outcome_vars = [c for c in outcome_cols if c in df.columns]
+    
+    # Rename id column to standard name if needed
+    if id_col != "subject_id":
+        df = df.rename(columns={id_col: "subject_id"})
+    
+    return create_analysis_dataset(
+        data=df,
+        outcome_vars=outcome_vars,
+        id_var="subject_id",
+        time_var="date" if "date" in df.columns else "day_index",
+        grouping_vars=grouping_vars,
+        sensor=sensor,
+        level=level,
+    )
+
+
+# =============================================================================
+# Generic Sensor Data Preparation (from profiles - uses prepare_from_dataframe)
+# =============================================================================
 
 def prepare_sensor_data(
     profiles: Dict[str, dict],
@@ -251,8 +389,9 @@ def prepare_sensor_data(
     """
     Generic preparation function for any sensor data from OH profiles.
     
-    This is the core function for preparing sensor data. Modality-specific
-    functions like prepare_daily_emg() are convenience wrappers around this.
+    This function extracts data from OH profiles using oh_parser and then
+    converts it to an AnalysisDataset. For more control, consider using
+    oh_parser directly followed by prepare_from_dataframe().
     
     :param profiles: Dictionary mapping subject_id -> OH profile dict
     :param sensor: Sensor name (e.g., "emg", "accelerometer", "heart_rate")
@@ -275,9 +414,15 @@ def prepare_sensor_data(
         ...     value_paths=["activity.*", "posture.*"],
         ...     add_day_index=True
         ... )
+    
+    Note:
+        For more control over data extraction and transformation, use:
+        >>> df = extract_nested(profiles, ...)  # oh_parser
+        >>> ds = prepare_from_dataframe(df, ...)  # oh_stats
     """
     from oh_parser import extract_nested
     
+    # Extract data using oh_parser
     df = extract_nested(
         profiles,
         base_path=base_path,
@@ -295,64 +440,30 @@ def prepare_sensor_data(
             level="daily",
         )
     
-    # Apply level filter if provided
+    # Apply level filter if provided (before passing to prepare_from_dataframe)
     if level_filter:
         for col, val in level_filter.items():
             if col in df.columns:
                 df = df[df[col] == val].copy()
                 df = df.drop(columns=[col])
     
-    # Parse dates - look for common date column names
+    # Detect date column
     date_col = None
     for col in ["date", "Date", "DATE", "timestamp"]:
         if col in df.columns:
             date_col = col
             break
     
-    if date_col:
-        df["date"] = _parse_date_column(df[date_col])
-        if date_col != "date":
-            df = df.drop(columns=[date_col])
-        
-        # Remove rows with unparseable dates
-        n_before = len(df)
-        df = df.dropna(subset=["date"])
-        if len(df) < n_before:
-            warnings.warn(f"Dropped {n_before - len(df)} rows with unparseable dates")
-    
-    # Handle sides if present
-    grouping_vars = []
-    if "side" in df.columns:
-        df, grouping_vars = _handle_sides(df, side)
-    
-    # Add day index
-    if add_day_index and "date" in df.columns:
-        df = _add_day_index(df)
-    
-    # Add weekday
-    if add_weekday and "date" in df.columns:
-        df["weekday"] = df["date"].dt.day_name()
-    
-    # Sort for reproducibility
-    sort_cols = ["subject_id"]
-    if "date" in df.columns:
-        sort_cols.append("date")
-    if "side" in df.columns:
-        sort_cols.append("side")
-    df = df.sort_values(sort_cols).reset_index(drop=True)
-    
-    # Identify outcome columns (exclude metadata columns)
-    meta_cols = {"subject_id", "date", "side", "day_index", "weekday"}
-    outcome_vars = [c for c in df.columns if c not in meta_cols]
-    
-    return create_analysis_dataset(
-        data=df,
-        outcome_vars=outcome_vars,
-        id_var="subject_id",
-        time_var="date" if "date" in df.columns else "day_index",
-        grouping_vars=grouping_vars,
+    # Use prepare_from_dataframe for the actual preparation
+    return prepare_from_dataframe(
+        df=df,
         sensor=sensor,
         level="daily",
+        id_col="subject_id",
+        date_col=date_col,
+        side=side,
+        add_day_index=add_day_index,
+        add_weekday=add_weekday,
     )
 
 
@@ -372,6 +483,9 @@ def prepare_daily_emg(
     Extracts EMG_daily_metrics from OH profiles and returns an analysis-ready
     dataset with parsed dates, day indices, and optional side handling.
     
+    This is a convenience wrapper. For more control, use oh_parser directly
+    followed by prepare_from_dataframe().
+    
     :param profiles: Dictionary mapping subject_id -> OH profile dict
     :param side: How to handle sides:
         - "left": Only left side data
@@ -387,8 +501,13 @@ def prepare_daily_emg(
         >>> profiles = load_profiles("/path/to/OH_profiles")
         >>> ds = prepare_daily_emg(profiles, side="both")
         >>> print(describe_dataset(ds))
+    
+    Note:
+        For more control, use oh_parser directly:
+        >>> df = extract_nested(profiles, base_path="sensor_metrics.emg", ...)
+        >>> df = df[df["level"] == "EMG_daily_metrics"]  # Your custom filtering
+        >>> ds = prepare_from_dataframe(df, sensor="emg", side="average")
     """
-    # Import here to avoid circular dependency
     from oh_parser import extract_nested
     
     # Extract daily EMG metrics
@@ -416,48 +535,20 @@ def prepare_daily_emg(
             level="daily",
         )
     
-    # Filter to daily metrics only
+    # Filter to daily metrics only (pre-processing before prepare_from_dataframe)
     df = df[df["level"] == "EMG_daily_metrics"].copy()
     df = df.drop(columns=["level"])
     
-    # Parse dates
-    df["date"] = _parse_date_column(df["date"])
-    
-    # Remove rows with unparseable dates
-    n_before = len(df)
-    df = df.dropna(subset=["date"])
-    if len(df) < n_before:
-        warnings.warn(f"Dropped {n_before - len(df)} rows with unparseable dates")
-    
-    # Handle sides
-    df, grouping_vars = _handle_sides(df, side)
-    
-    # Add day index (ordinal within subject)
-    if add_day_index:
-        df = _add_day_index(df)
-    
-    # Add weekday
-    if add_weekday:
-        df["weekday"] = df["date"].dt.day_name()
-    
-    # Sort for reproducibility
-    sort_cols = ["subject_id", "date"]
-    if "side" in df.columns:
-        sort_cols.append("side")
-    df = df.sort_values(sort_cols).reset_index(drop=True)
-    
-    # Identify outcome columns (exclude metadata columns)
-    meta_cols = {"subject_id", "date", "side", "day_index", "weekday"}
-    outcome_vars = [c for c in df.columns if c not in meta_cols]
-    
-    return create_analysis_dataset(
-        data=df,
-        outcome_vars=outcome_vars,
-        id_var="subject_id",
-        time_var="date",
-        grouping_vars=grouping_vars,
+    # Use prepare_from_dataframe for the actual preparation
+    return prepare_from_dataframe(
+        df=df,
         sensor="emg",
         level="daily",
+        id_col="subject_id",
+        date_col="date",
+        side=side,
+        add_day_index=add_day_index,
+        add_weekday=add_weekday,
     )
 
 
