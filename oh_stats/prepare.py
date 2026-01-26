@@ -297,10 +297,18 @@ def prepare_from_dataframe(
         >>> result = fit_lmm(ds, "EMG_intensity.mean_percent_mvc")
     """
     if df.empty:
-        warnings.warn(f"Empty DataFrame provided")
+        warnings.warn("Empty DataFrame provided")
+        empty_cols = [id_col]
+        if date_col:
+            empty_cols.append(date_col)
+        empty_df = pd.DataFrame(columns=empty_cols)
+        time_var = date_col if date_col else id_col
         return create_analysis_dataset(
-            data=pd.DataFrame(),
+            data=empty_df,
             outcome_vars=[],
+            id_var=id_col,
+            time_var=time_var,
+            grouping_vars=[],
             sensor=sensor,
             level=level,
         )
@@ -313,7 +321,8 @@ def prepare_from_dataframe(
                         f"Available columns: {list(df.columns)}")
     
     # Parse dates if date column provided
-    if date_col and date_col in df.columns:
+    has_date = bool(date_col and date_col in df.columns)
+    if has_date:
         df["date"] = _parse_date_column(df[date_col])
         if date_col != "date":
             df = df.drop(columns=[date_col])
@@ -348,7 +357,8 @@ def prepare_from_dataframe(
     # Identify outcome columns
     meta_cols = {id_col, "date", "side", "day_index", "weekday"}
     if outcome_cols is None:
-        outcome_vars = [c for c in df.columns if c not in meta_cols]
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        outcome_vars = [c for c in numeric_cols if c not in meta_cols]
     else:
         # Validate provided outcome columns exist
         missing = [c for c in outcome_cols if c not in df.columns]
@@ -360,11 +370,12 @@ def prepare_from_dataframe(
     if id_col != "subject_id":
         df = df.rename(columns={id_col: "subject_id"})
     
+    time_var = "date" if "date" in df.columns else "subject_id"
     return create_analysis_dataset(
         data=df,
         outcome_vars=outcome_vars,
         id_var="subject_id",
-        time_var="date" if "date" in df.columns else "day_index",
+        time_var=time_var,
         grouping_vars=grouping_vars,
         sensor=sensor,
         level=level,
@@ -811,6 +822,636 @@ def prepare_weekly_emg(
         grouping_vars=grouping_vars,
         sensor="emg",
         level="weekly",
+    )
+
+
+# =============================================================================
+# Custom Metrics Preparation (Single-instance + Daily Metrics)
+# =============================================================================
+
+def _normalize_text(text: Any) -> str:
+    """Normalize text for categorical mapping (lowercase + strip accents)."""
+    if not isinstance(text, str):
+        return ""
+    text = text.strip().lower()
+    accent_map = str.maketrans(
+        "áàâãäéèêëíìîïóòôõöúùûüç",
+        "aaaaaeeeeiiiiooooouuuuc",
+    )
+    return text.translate(accent_map)
+
+
+def _map_ipaq_level(value: Any) -> float:
+    """Map IPAQ ordinal categories to numeric scores."""
+    mapping = {"leve": 1, "moderada": 2, "alta": 3}
+    return float(mapping.get(_normalize_text(value), np.nan))
+
+
+def _percent_to_fraction(series: pd.Series) -> pd.Series:
+    """Convert percent values (0-100) to fraction (0-1) when needed."""
+    series = pd.to_numeric(series, errors="coerce")
+    if series.max(skipna=True) > 1:
+        series = series / 100.0
+    return series
+
+
+def _parse_time_to_seconds(t: str) -> Optional[int]:
+    """Parse HH-MM-SS or HH:MM:SS time strings to seconds."""
+    if not isinstance(t, str):
+        return None
+    t = t.replace(":", "-")
+    parts = t.split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        h, m, s = [int(p) for p in parts]
+        return h * 3600 + m * 60 + s
+    except ValueError:
+        return None
+
+
+def _compute_durations(start_times: List[str], end_times: List[str]) -> List[float]:
+    """Compute session durations in seconds from start/end time lists."""
+    durations = []
+    for start, end in zip(start_times, end_times):
+        s = _parse_time_to_seconds(start)
+        e = _parse_time_to_seconds(end)
+        if s is None or e is None:
+            continue
+        if e < s:
+            e += 24 * 3600
+        durations.append(float(e - s))
+    return durations
+
+
+def _normalize_date_key(date_str: str, keys: List[str]) -> Optional[str]:
+    """Match a date string to available keys (supports DD-MM-YYYY and YYYY-MM-DD)."""
+    if date_str in keys:
+        return date_str
+    ts = parse_date(date_str)
+    if ts is None:
+        return None
+    candidates = [ts.strftime("%Y-%m-%d"), ts.strftime("%d-%m-%Y")]
+    for c in candidates:
+        if c in keys:
+            return c
+    return None
+
+
+def _assign_session_durations(
+    sessions: List[str],
+    start_times: List[str],
+    durations: List[float],
+) -> Dict[str, float]:
+    """Assign durations to sessions using exact matches or time-order fallback."""
+    durations_by_session: Dict[str, float] = {}
+    start_map = {s: d for s, d in zip(start_times, durations)}
+    for session in sessions:
+        if session in start_map:
+            durations_by_session[session] = start_map[session]
+
+    if len(durations_by_session) == len(sessions):
+        return durations_by_session
+
+    remaining_sessions = [s for s in sessions if s not in durations_by_session]
+    sorted_sessions = sorted(
+        remaining_sessions,
+        key=lambda x: _parse_time_to_seconds(x) if _parse_time_to_seconds(x) is not None else 0,
+    )
+    sorted_pairs = sorted(
+        zip(start_times, durations),
+        key=lambda x: _parse_time_to_seconds(x[0]) if _parse_time_to_seconds(x[0]) is not None else 0,
+    )
+
+    for session, (_, dur) in zip(sorted_sessions, sorted_pairs):
+        if session not in durations_by_session:
+            durations_by_session[session] = dur
+
+    return durations_by_session
+
+
+def _safe_weighted_mean(values: pd.Series, weights: pd.Series) -> float:
+    """Compute weighted mean with graceful fallback."""
+    values = pd.to_numeric(values, errors="coerce")
+    weights = pd.to_numeric(weights, errors="coerce")
+    valid = (~values.isna()) & (~weights.isna())
+    if valid.sum() == 0:
+        return float(np.nan)
+    w = weights[valid]
+    if w.sum() <= 0:
+        return float(np.nan)
+    return float(np.average(values[valid], weights=w))
+
+
+def _prepare_daily_workload_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
+    """Extract and aggregate daily workload questionnaire metrics."""
+    from oh_parser import extract_nested
+
+    workload_keys = [
+        "focus_and_mental_strain",
+        "rushed_and_under_pressure",
+        "frequent_interruptions",
+        "more_effort_than_resources",
+        "heavy_workload",
+    ]
+    df = extract_nested(
+        profiles,
+        base_path="daily_questionnaires.workload",
+        level_names=["date"],
+        value_paths=workload_keys + ["open_question"],
+        flatten_values=True,
+    )
+
+    if df.empty:
+        return pd.DataFrame(columns=["subject_id", "date", "workload_mean"])
+
+    df["date"] = _parse_date_column(df["date"])
+    df = df.dropna(subset=["date"])
+
+    available_keys = [k for k in workload_keys if k in df.columns]
+    if not available_keys:
+        # Fallback: first five numeric columns excluding open questions
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = [c for c in numeric_cols if c not in ["subject_id", "day_index"]]
+        available_keys = numeric_cols[:5]
+
+    for k in available_keys:
+        df[k] = pd.to_numeric(df[k], errors="coerce")
+
+    df["workload_mean"] = df[available_keys].mean(axis=1, skipna=True)
+    return df[["subject_id", "date", "workload_mean"]]
+
+
+def _prepare_daily_har_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
+    """Extract and aggregate daily human activity metrics."""
+    from oh_parser import extract_nested
+
+    df = extract_nested(
+        profiles,
+        base_path="sensor_metrics.human_activities",
+        level_names=["date", "session"],
+        value_paths=[
+            "HAR_durations.*",
+            "HAR_distributions.*",
+            "HAR_steps.*",
+        ],
+        flatten_values=True,
+    )
+
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "subject_id",
+            "date",
+            "har_sentado_duration_sec",
+            "har_andar_duration_sec",
+            "har_de_pe_duration_sec",
+            "har_total_duration_sec",
+            "har_sentado_prop",
+            "har_num_steps",
+        ])
+
+    df["date"] = _parse_date_column(df["date"])
+    df = df.dropna(subset=["date"])
+
+    def _find_col(candidates: List[str]) -> Optional[str]:
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
+
+    sentado_col = _find_col([
+        "HAR_durations.Sentado_duration_sec",
+        "HAR_durations.Sentado_duration_sec",
+    ])
+    andar_col = _find_col([
+        "HAR_durations.Andar_duration_sec",
+    ])
+    depe_col = _find_col([
+        "HAR_durations.De pé_duration_sec",
+        "HAR_durations.De pe_duration_sec",
+    ])
+    dist_sentado_col = _find_col([
+        "HAR_distributions.Sentado",
+    ])
+    steps_col = _find_col([
+        "HAR_steps.num_steps",
+    ])
+
+    for col in [sentado_col, andar_col, depe_col, dist_sentado_col, steps_col]:
+        if col and col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["_har_total"] = df[[c for c in [sentado_col, andar_col, depe_col] if c]].sum(axis=1, skipna=True)
+
+    if dist_sentado_col and dist_sentado_col in df.columns:
+        df[dist_sentado_col] = _percent_to_fraction(df[dist_sentado_col])
+
+    grouped = []
+    for (subject_id, date), g in df.groupby(["subject_id", "date"]):
+        total_duration = g["_har_total"].sum(skipna=True)
+        sentado = g[sentado_col].sum(skipna=True) if sentado_col else np.nan
+        andar = g[andar_col].sum(skipna=True) if andar_col else np.nan
+        depe = g[depe_col].sum(skipna=True) if depe_col else np.nan
+        steps = g[steps_col].sum(skipna=True) if steps_col else np.nan
+
+        if dist_sentado_col and total_duration > 0:
+            sit_prop = _safe_weighted_mean(g[dist_sentado_col], g["_har_total"])
+        elif total_duration > 0 and pd.notna(sentado):
+            sit_prop = float(sentado / total_duration)
+        else:
+            sit_prop = np.nan
+
+        grouped.append({
+            "subject_id": subject_id,
+            "date": date,
+            "har_sentado_duration_sec": sentado,
+            "har_andar_duration_sec": andar,
+            "har_de_pe_duration_sec": depe,
+            "har_total_duration_sec": total_duration,
+            "har_sentado_prop": sit_prop,
+            "har_num_steps": steps,
+        })
+
+    return pd.DataFrame(grouped)
+
+
+def _get_watch_durations_for_day(profile: dict, date_str: str) -> Tuple[List[str], List[float]]:
+    """Get watch start times and durations for a given day from sensor_timeline."""
+    timeline = profile.get("sensor_metrics", {}).get("sensor_timeline", {})
+    if not isinstance(timeline, dict) or not timeline:
+        return [], []
+
+    date_key = _normalize_date_key(date_str, list(timeline.keys()))
+    if not date_key:
+        return [], []
+
+    day = timeline.get(date_key, {})
+    sensor_times = day.get("sensor_times", {})
+    watch = sensor_times.get("watch", {})
+    start_times = watch.get("start_times", []) or []
+    end_times = watch.get("end_times", []) or []
+    durations = _compute_durations(start_times, end_times)
+    return start_times, durations
+
+
+def _prepare_daily_hr_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
+    """Extract and aggregate daily heart rate metrics with duration weighting."""
+    from oh_parser import extract_nested
+
+    df = extract_nested(
+        profiles,
+        base_path="sensor_metrics.heart_rate",
+        level_names=["date", "session"],
+        value_paths=[
+            "HR_ratio_stats.mean",
+            "HR_ratio_stats.std",
+        ],
+        flatten_values=True,
+    )
+
+    if df.empty:
+        return pd.DataFrame(columns=["subject_id", "date", "hr_ratio_mean", "hr_ratio_std"])
+
+    df["date"] = _parse_date_column(df["date"])
+    df = df.dropna(subset=["date"])
+
+    df["HR_ratio_stats.mean"] = pd.to_numeric(df["HR_ratio_stats.mean"], errors="coerce")
+    df["HR_ratio_stats.std"] = pd.to_numeric(df["HR_ratio_stats.std"], errors="coerce")
+
+    rows = []
+    for (subject_id, date), g in df.groupby(["subject_id", "date"]):
+        profile = profiles.get(str(subject_id)) or profiles.get(subject_id)
+        if not profile:
+            profile = profiles.get(str(int(subject_id))) if isinstance(subject_id, (int, np.integer)) else None
+
+        start_times, durations = _get_watch_durations_for_day(profile or {}, str(date.date()))
+        durations_by_session = _assign_session_durations(
+            sessions=g["session"].astype(str).tolist(),
+            start_times=start_times,
+            durations=durations,
+        )
+
+        g = g.copy()
+        g["_duration"] = g["session"].map(durations_by_session)
+
+        mean_duration = g["_duration"].mean(skipna=True)
+        if np.isnan(mean_duration):
+            mean_duration = 1.0
+        g["_duration"] = g["_duration"].fillna(mean_duration)
+
+        hr_mean = _safe_weighted_mean(g["HR_ratio_stats.mean"], g["_duration"])
+        hr_std = _safe_weighted_mean(g["HR_ratio_stats.std"], g["_duration"])
+
+        rows.append({
+            "subject_id": subject_id,
+            "date": date,
+            "hr_ratio_mean": hr_mean,
+            "hr_ratio_std": hr_std,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _prepare_daily_noise_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
+    """Extract and aggregate daily noise metrics."""
+    from oh_parser import extract_nested
+
+    df = extract_nested(
+        profiles,
+        base_path="sensor_metrics.noise",
+        level_names=["date", "session"],
+        value_paths=[
+            "Noise_statistics.mean",
+            "Noise_statistics.std",
+            "Noise_durations.*",
+        ],
+        flatten_values=True,
+    )
+
+    if df.empty:
+        return pd.DataFrame(columns=["subject_id", "date", "noise_mean", "noise_std"])
+
+    df["date"] = _parse_date_column(df["date"])
+    df = df.dropna(subset=["date"])
+
+    df["Noise_statistics.mean"] = pd.to_numeric(df["Noise_statistics.mean"], errors="coerce")
+    df["Noise_statistics.std"] = pd.to_numeric(df["Noise_statistics.std"], errors="coerce")
+
+    duration_cols = [c for c in df.columns if c.startswith("Noise_durations.")]
+    for c in duration_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["_noise_duration"] = df[duration_cols].sum(axis=1, skipna=True) if duration_cols else np.nan
+
+    rows = []
+    for (subject_id, date), g in df.groupby(["subject_id", "date"]):
+        g = g.copy()
+        mean_duration = g["_noise_duration"].mean(skipna=True)
+        if np.isnan(mean_duration):
+            mean_duration = 1.0
+        g["_noise_duration"] = g["_noise_duration"].fillna(mean_duration)
+
+        noise_mean = _safe_weighted_mean(g["Noise_statistics.mean"], g["_noise_duration"])
+        noise_std = _safe_weighted_mean(g["Noise_statistics.std"], g["_noise_duration"])
+
+        rows.append({
+            "subject_id": subject_id,
+            "date": date,
+            "noise_mean": noise_mean,
+            "noise_std": noise_std,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def _prepare_daily_emg_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
+    """Extract daily EMG p90/p50 (right side) from EMG_daily_metrics."""
+    from oh_parser import extract_nested
+
+    df = extract_nested(
+        profiles,
+        base_path="sensor_metrics.emg",
+        level_names=["date", "level", "side"],
+        value_paths=[
+            "EMG_apdf.active.p90",
+            "EMG_apdf.active.p50",
+        ],
+        flatten_values=True,
+    )
+
+    if df.empty:
+        return pd.DataFrame(columns=["subject_id", "date", "emg_apdf_active_p90", "emg_apdf_active_p50"])
+
+    df = df[(df["level"] == "EMG_daily_metrics") & (df["side"] == "right")].copy()
+    df = df.drop(columns=["level", "side"])
+
+    df["date"] = _parse_date_column(df["date"])
+    df = df.dropna(subset=["date"])
+
+    df["EMG_apdf.active.p90"] = _percent_to_fraction(df["EMG_apdf.active.p90"])
+    df["EMG_apdf.active.p50"] = _percent_to_fraction(df["EMG_apdf.active.p50"])
+
+    df = df.rename(columns={
+        "EMG_apdf.active.p90": "emg_apdf_active_p90",
+        "EMG_apdf.active.p50": "emg_apdf_active_p50",
+    })
+
+    return df[["subject_id", "date", "emg_apdf_active_p90", "emg_apdf_active_p50"]]
+
+
+def prepare_daily_metrics(
+    profiles: Dict[str, dict],
+    add_day_index: bool = True,
+    add_weekday: bool = True,
+) -> AnalysisDataset:
+    """
+    Prepare a unified daily metrics dataset (sensor + questionnaire).
+    """
+    daily_frames = [
+        _prepare_daily_workload_metrics(profiles),
+        _prepare_daily_har_metrics(profiles),
+        _prepare_daily_hr_metrics(profiles),
+        _prepare_daily_noise_metrics(profiles),
+        _prepare_daily_emg_metrics(profiles),
+    ]
+
+    # Merge all daily frames on subject_id + date
+    non_empty = [f for f in daily_frames if not f.empty]
+    if not non_empty:
+        return create_analysis_dataset(
+            data=pd.DataFrame(columns=["subject_id", "date"]),
+            outcome_vars=[],
+            id_var="subject_id",
+            time_var="date",
+            grouping_vars=[],
+            sensor="daily_metrics",
+            level="daily",
+        )
+
+    df = non_empty[0]
+    for frame in non_empty[1:]:
+        df = df.merge(frame, on=["subject_id", "date"], how="outer")
+
+    if df.empty:
+        return create_analysis_dataset(
+            data=pd.DataFrame(columns=["subject_id", "date"]),
+            outcome_vars=[],
+            id_var="subject_id",
+            time_var="date",
+            grouping_vars=[],
+            sensor="daily_metrics",
+            level="daily",
+        )
+
+    # Add day index and weekday
+    if add_day_index:
+        df = _add_day_index(df)
+    if add_weekday:
+        df["weekday"] = df["date"].dt.day_name()
+
+    df["subject_id"] = df["subject_id"].astype(str)
+
+    # Identify numeric outcome columns
+    meta_cols = {"subject_id", "date", "day_index", "weekday"}
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    outcome_vars = [c for c in numeric_cols if c not in meta_cols]
+
+    return create_analysis_dataset(
+        data=df,
+        outcome_vars=outcome_vars,
+        id_var="subject_id",
+        time_var="date",
+        grouping_vars=[],
+        sensor="daily_metrics",
+        level="daily",
+    )
+
+
+def prepare_single_instance_metrics(
+    profiles: Dict[str, dict],
+) -> AnalysisDataset:
+    """
+    Prepare single-instance metrics (metadata + baseline questionnaires).
+    """
+    from oh_parser import extract, extract_flat
+
+    meta_df = extract_flat(profiles, base_path="meta_data")
+
+    df = extract(
+        profiles,
+        paths={
+            "ipaq_level": "single_instance_questionnaires.personal.IPAQ.ipaq",
+            "ipaq_total_met": "single_instance_questionnaires.personal.IPAQ.total_met",
+            "ospaq_sitting_pct": "single_instance_questionnaires.personal.OSPAQ.percentagem_sentado",
+        },
+    )
+
+    if not meta_df.empty:
+        df["subject_id"] = df["subject_id"].astype(str)
+        meta_df["subject_id"] = meta_df["subject_id"].astype(str)
+        df = meta_df.merge(df, on="subject_id", how="outer")
+
+    # Map IPAQ to ordinal numeric score
+    if "ipaq_level" in df.columns:
+        df["ipaq_level_num"] = df["ipaq_level"].apply(_map_ipaq_level)
+
+    # Scale OSPAQ sitting percentage to fraction
+    if "ospaq_sitting_pct" in df.columns:
+        df["ospaq_sitting_frac"] = _percent_to_fraction(df["ospaq_sitting_pct"])
+
+    # Weekly HAR duration (duration-weighted across days)
+    daily = prepare_daily_metrics(profiles)
+    if not daily["data"].empty and "har_total_duration_sec" in daily["data"].columns:
+        weekly_har = (
+            daily["data"]
+            .groupby("subject_id")["har_total_duration_sec"]
+            .sum(min_count=1)
+            .reset_index()
+            .rename(columns={"har_total_duration_sec": "weekly_har_total_duration_sec"})
+        )
+        weekly_har["subject_id"] = weekly_har["subject_id"].astype(str)
+        df = df.merge(weekly_har, on="subject_id", how="left")
+
+    # Identify numeric outcome columns
+    meta_cols = {"subject_id"}
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    outcome_vars = [c for c in numeric_cols if c not in meta_cols]
+
+    df["subject_id"] = df["subject_id"].astype(str)
+
+    return create_analysis_dataset(
+        data=df,
+        outcome_vars=outcome_vars,
+        id_var="subject_id",
+        time_var="subject_id",
+        grouping_vars=[],
+        sensor="single_instance",
+        level="single_instance",
+    )
+
+
+def add_subject_metadata(
+    ds: AnalysisDataset,
+    profiles: Dict[str, dict],
+    fields: Optional[List[str]] = None,
+) -> AnalysisDataset:
+    """
+    Attach subject-level metadata fields to an AnalysisDataset.
+    """
+    from oh_parser import extract
+
+    fields = fields or ["work_type"]
+    paths = {field: f"meta_data.{field}" for field in fields}
+    meta_df = extract(profiles, paths=paths, include_subject_id=True)
+
+    if meta_df.empty:
+        return ds
+
+    df = ds["data"].copy()
+    df["subject_id"] = df["subject_id"].astype(str)
+    meta_df["subject_id"] = meta_df["subject_id"].astype(str)
+    df = df.merge(meta_df, on="subject_id", how="left")
+    return create_analysis_dataset(
+        data=df,
+        outcome_vars=ds["outcome_vars"],
+        id_var=ds["id_var"],
+        time_var=ds["time_var"],
+        grouping_vars=ds["grouping_vars"],
+        sensor=ds["sensor"],
+        level=ds["level"],
+    )
+
+
+def aggregate_daily_to_subject(
+    ds: AnalysisDataset,
+    outcomes: Optional[List[str]] = None,
+    method: Literal["mean", "median", "sum"] = "mean",
+    weight_col: Optional[str] = None,
+) -> AnalysisDataset:
+    """
+    Aggregate daily observations to subject-level summaries.
+    """
+    df = ds["data"].copy()
+    outcomes = outcomes or ds["outcome_vars"]
+
+    if not outcomes:
+        return create_analysis_dataset(
+            data=pd.DataFrame(columns=["subject_id"]),
+            outcome_vars=[],
+            id_var="subject_id",
+            time_var="subject_id",
+            grouping_vars=[],
+            sensor=ds["sensor"],
+            level="subject",
+        )
+
+    if weight_col and weight_col in df.columns:
+        grouped = []
+        for subject_id, g in df.groupby("subject_id"):
+            row = {"subject_id": subject_id}
+            weights = g[weight_col]
+            for col in outcomes:
+                row[col] = _safe_weighted_mean(g[col], weights)
+            grouped.append(row)
+        agg_df = pd.DataFrame(grouped)
+    else:
+        if method == "mean":
+            agg_df = df.groupby("subject_id")[outcomes].mean(numeric_only=True).reset_index()
+        elif method == "median":
+            agg_df = df.groupby("subject_id")[outcomes].median(numeric_only=True).reset_index()
+        elif method == "sum":
+            agg_df = df.groupby("subject_id")[outcomes].sum(numeric_only=True).reset_index()
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
+    return create_analysis_dataset(
+        data=agg_df,
+        outcome_vars=outcomes,
+        id_var="subject_id",
+        time_var="subject_id",
+        grouping_vars=[],
+        sensor=ds["sensor"],
+        level="subject",
     )
 
 

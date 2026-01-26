@@ -1,555 +1,569 @@
 """
-OH Stats Testing Script
-=======================
+OH Stats Comprehensive Analysis Entry Point
+===========================================
 
-Demonstrates the full statistical analysis pipeline for EMG data:
-1. Data preparation
-2. Descriptive statistics & QA
-3. Model fitting (LMM)
-4. Post-hoc contrasts
-5. FDR correction
-6. Diagnostics
-7. Report generation
+This script is the **main, step-by-step entry point** for running the full
+oh_stats analysis pipeline on OH profiles. It is intentionally verbose and
+heavily commented so you can follow **every step** of the workflow.
 
-Run from the OH_Parser directory:
+Pipeline overview:
+1) Load OH profiles
+2) Discover available data
+3) Prepare analysis datasets
+4) Run data quality checks
+5) Fit statistical models (LMM)
+6) Post-hoc contrasts and effect sizes
+7) Multiplicity correction (FDR + Holm)
+8) Diagnostics
+9) Reporting + export
+10) Registry inspection
+
+Run from the project root:
     python testing_stats.py
 """
-import sys
 import os
 import warnings
+
+import numpy as np
+import pandas as pd
+
+from oh_parser import load_profiles, list_subjects
+
+from oh_stats import (
+    discover_sensors,
+    discover_questionnaires,
+    get_profile_summary,
+    prepare_daily_emg,
+    prepare_daily_metrics,
+    prepare_single_instance_metrics,
+    prepare_daily_questionnaires,
+    add_subject_metadata,
+    aggregate_daily_to_subject,
+    describe_dataset,
+    validate_dataset,
+    subset_dataset,
+    get_n_subjects,
+    get_n_observations,
+    get_date_range,
+    get_obs_per_subject,
+    summarize_outcomes,
+    check_normality,
+    check_variance,
+    missingness_report,
+    fit_lmm,
+    fit_all_outcomes,
+    summarize_lmm_result,
+    apply_transform,
+    prepare_from_dataframe,
+    compare_models,
+    get_residuals,
+    get_fitted_values,
+    get_random_effects,
+    pairwise_contrasts,
+    compute_emmeans,
+    compute_effect_size,
+    test_linear_trend,
+    apply_fdr,
+    apply_holm,
+    apply_holm_hypotheses,
+    adjust_pvalues,
+    significant_outcomes,
+    fdr_summary,
+    residual_diagnostics,
+    summarize_diagnostics,
+    descriptive_table,
+    coefficient_table,
+    coefficient_table_multiple,
+    descriptive_table_formatted,
+    results_summary,
+    export_to_csv,
+    export_to_latex,
+    print_results_summary,
+    print_coefficient_summary,
+)
+
+from oh_stats.registry import (
+    OutcomeType,
+    TransformType,
+    list_outcomes,
+    get_outcome_info,
+)
+
+import statsmodels.api as sm
 
 # Suppress some convergence warnings for cleaner output
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-from oh_parser import load_profiles, list_subjects
 
-# =============================================================================
-# SETUP: Load profiles
-# =============================================================================
-print("=" * 70)
-print("OH STATS PIPELINE DEMONSTRATION")
-print("=" * 70)
+def print_section(title: str) -> None:
+    """Utility to print a consistent section header."""
+    print("\n" + "=" * 80)
+    print(title)
+    print("=" * 80)
 
-# Path can be set via environment variable or defaults to external drive
-OH_PROFILES_PATH = os.environ.get(
-    "OH_PROFILES_PATH",
-    "/Volumes/NO NAME/Backup PrevOccupAI_PLUS Data/OH_profiles"
-)
 
-print("\n[1] Loading OH profiles...")
-profiles = load_profiles(OH_PROFILES_PATH)
-subjects = list_subjects(profiles)
-print(f"    Loaded {len(subjects)} subjects: {subjects[:5]}...")
+def main() -> None:
+    """Run the full OH stats pipeline end-to-end."""
+    # ---------------------------------------------------------------------
+    # STEP 1: Load OH profiles
+    # ---------------------------------------------------------------------
+    print_section("[1] LOADING OH PROFILES")
 
-# =============================================================================
-# STEP 1A: Data Discovery
-# =============================================================================
-print("\n" + "=" * 70)
-print("[1A] DATA DISCOVERY")
-print("=" * 70)
+    # Path can be overridden by environment variable
+    oh_profiles_path = os.getenv("OH_PROFILES_PATH", r"E:\Backup PrevOccupAI_PLUS Data\OH_profiles_2")
 
-from oh_stats import discover_sensors, discover_questionnaires, get_profile_summary
+    print(f"Using OH profile path: {oh_profiles_path}")
+    profiles = load_profiles(oh_profiles_path)
+    subjects = list_subjects(profiles)
+    print(f"Loaded {len(subjects)} subjects: {subjects[:5]}...")
 
-# Discover available sensors
-print("\n--- Available Sensors ---")
-sensors = discover_sensors(profiles)
-for sensor, metrics in sensors.items():
-    print(f"  {sensor}: {len(metrics)} metrics")
-    if metrics:
-        print(f"    Sample: {list(metrics)[:3]}...")
+    # ---------------------------------------------------------------------
+    # STEP 2: Data discovery
+    # ---------------------------------------------------------------------
+    print_section("[2] DATA DISCOVERY")
 
-# Discover questionnaires
-print("\n--- Available Questionnaires ---")
-questionnaires = discover_questionnaires(profiles)
-for q_type, q_names in questionnaires.items():
-    print(f"  {q_type}: {q_names}")
+    print("\n--- Available Sensors ---")
+    sensors = discover_sensors(profiles)
+    for sensor, metrics in sensors.items():
+        print(f"  {sensor}: {len(metrics)} metrics")
+        if metrics:
+            print(f"    Sample: {list(metrics)[:3]}...")
 
-# Profile summary
-print("\n--- Profile Summary ---")
-profile_summary = get_profile_summary(profiles)
-print(profile_summary[:500])  # First 500 chars
+    print("\n--- Available Questionnaires ---")
+    questionnaires = discover_questionnaires(profiles)
+    for q_type, q_names in questionnaires.items():
+        print(f"  {q_type}: {q_names}")
 
-# =============================================================================
-# STEP 1B: Data Preparation
-# =============================================================================
-print("\n" + "=" * 70)
-print("[2] DATA PREPARATION")
-print("=" * 70)
+    print("\n--- Profile Summary (First 500 chars) ---")
+    print(get_profile_summary(profiles)[:500])
 
-from oh_stats import prepare_daily_emg, prepare_daily_questionnaires
+    # ---------------------------------------------------------------------
+    # STEP 3: Data preparation
+    # ---------------------------------------------------------------------
+    print_section("[3] DATA PREPARATION")
 
-# Prepare daily EMG data (keep both sides)
-ds = prepare_daily_emg(profiles, side="both")
-print(f"\nDataset summary:")
-print(f"  Shape: {ds['data'].shape}")
-print(f"  Outcomes: {len(ds['outcome_vars'])} variables")
-print(f"  ID var: {ds['id_var']}")
-print(f"  Time var: {ds['time_var']}")
-print(f"  Grouping: {ds['grouping_vars']}")
-print(f"\nFirst 10 rows:")
-print(ds['data'].head(10).to_string())
+    # 3A. EMG daily (right side only for analysis)
+    print("\n[3A] Daily EMG (side=right)")
+    emg_ds = prepare_daily_emg(profiles, side="right")
+    print(f"  Shape: {emg_ds['data'].shape}")
+    print(f"  Outcomes: {len(emg_ds['outcome_vars'])}")
+    print(f"  Grouping: {emg_ds['grouping_vars']}")
+    print(emg_ds["data"].head(5).to_string())
 
-# Check if questionnaire data is available (conditionally activated)
-qs = prepare_daily_questionnaires(profiles)
-if qs is None:
-    print("\n[Note] Daily questionnaire data not available - skipping")
-else:
-    print(f"\nQuestionnaire data: {qs['data'].shape}")
-
-# =============================================================================
-# STEP 1C: Dataset Utilities
-# =============================================================================
-print("\n" + "=" * 70)
-print("[1C] DATASET UTILITIES")
-print("=" * 70)
-
-from oh_stats import (
-    describe_dataset, validate_dataset, subset_dataset,
-    get_n_subjects, get_n_observations, get_date_range, get_obs_per_subject
-)
-
-# Describe dataset
-print("\n--- describe_dataset() ---")
-print(describe_dataset(ds))
-
-# Validation
-print("\n--- validate_dataset() ---")
-try:
-    validated_ds = validate_dataset(ds)
-    print(f"  Valid: True (no exceptions raised)")
-    print(f"  Outcomes validated: {len(validated_ds['outcome_vars'])}")
-except ValueError as e:
-    print(f"  Valid: False")
-    print(f"  Error: {e}")
-
-# Quick accessors
-print("\n--- Quick Accessors ---")
-print(f"  N subjects: {get_n_subjects(ds)}")
-print(f"  N observations: {get_n_observations(ds)}")
-print(f"  Date range: {get_date_range(ds)}")
-print(f"  Obs per subject (first 3): {dict(list(get_obs_per_subject(ds).items())[:3])}")
-
-# Subset dataset
-print("\n--- subset_dataset() ---")
-if len(subjects) >= 2:
-    ds_subset = subset_dataset(ds, subjects=subjects[:2])
-    print(f"  Original: {get_n_subjects(ds)} subjects, {get_n_observations(ds)} obs")
-    print(f"  Subset: {get_n_subjects(ds_subset)} subjects, {get_n_observations(ds_subset)} obs")
-
-# =============================================================================
-# STEP 2: Descriptive Statistics
-# =============================================================================
-print("\n" + "=" * 70)
-print("[3] DESCRIPTIVE STATISTICS")
-print("=" * 70)
-
-from oh_stats import summarize_outcomes, check_normality, check_variance, missingness_report
-
-# Select key outcomes for demonstration
-primary_outcomes = [
-    "EMG_intensity.mean_percent_mvc",
-    "EMG_apdf.active.p50",
-    "EMG_rest_recovery.rest_percent",
-    "EMG_rest_recovery.gap_count",
-]
-
-# Summary statistics
-print("\n--- Summary Statistics ---")
-summary = summarize_outcomes(ds, outcomes=primary_outcomes)
-print(summary.to_string(index=False))
-
-# Normality check
-print("\n--- Normality Assessment ---")
-normality = check_normality(ds, outcomes=primary_outcomes)
-print(normality[["outcome", "n", "skewness", "is_normal", "recommended_transform"]].to_string(index=False))
-
-# Variance check (detect degenerate outcomes)
-print("\n--- Variance Check (Degenerate Detection) ---")
-variance = check_variance(ds, outcomes=primary_outcomes)
-print(variance[["outcome", "n_unique", "pct_mode", "is_degenerate", "reason"]].to_string(index=False))
-
-# Missingness
-print("\n--- Missingness Summary ---")
-miss = missingness_report(ds, outcomes=primary_outcomes)
-print(f"Total missing: {miss['summary']['total_missing']} cells ({miss['summary']['pct_missing']:.1f}%)")
-
-# =============================================================================
-# STEP 3: Fit Linear Mixed Models
-# =============================================================================
-print("\n" + "=" * 70)
-print("[4] LINEAR MIXED MODELS")
-print("=" * 70)
-
-from oh_stats import fit_lmm, fit_all_outcomes, summarize_lmm_result
-from oh_stats.registry import get_outcome_info, OutcomeType
-
-# Fit single model (primary outcome)
-print("\n--- Single Model: EMG Mean %MVC ---")
-result = fit_lmm(
-    ds,
-    outcome="EMG_intensity.mean_percent_mvc",
-    fixed_effects=["C(day_index)", "C(side)"],  # Day + Side as categorical
-    random_intercept="subject_id",
-)
-print(summarize_lmm_result(result))
-print("\nCoefficients:")
-print(result['coefficients'].to_string(index=False))
-
-# Check model fit stats
-print(f"\nRandom effects:")
-group_var = result['random_effects'].get('group_var', 'NA')
-resid_var = result['random_effects'].get('residual_var', 'NA')
-icc = result['random_effects'].get('icc', 'NA')
-print(f"  Subject variance: {group_var:.4f}" if isinstance(group_var, (int, float)) else f"  Subject variance: {group_var}")
-print(f"  Residual variance: {resid_var:.4f}" if isinstance(resid_var, (int, float)) else f"  Residual variance: {resid_var}")
-print(f"  ICC: {icc:.3f}" if isinstance(icc, (int, float)) else f"  ICC: {icc}")
-
-# --- Transforms demonstration ---
-print("\n--- Outcome Transforms ---")
-from oh_stats import apply_transform
-from oh_stats.registry import TransformType
-
-# Apply log transform to a skewed outcome
-test_outcome = "EMG_intensity.mean_percent_mvc"
-original_values = ds['data'][test_outcome].dropna()
-print(f"  Original range: {original_values.min():.2f} - {original_values.max():.2f}")
-
-# Log transform
-log_values = apply_transform(original_values, TransformType.LOG)
-print(f"  Log-transformed range: {log_values.min():.2f} - {log_values.max():.2f}")
-
-# Sqrt transform
-sqrt_values = apply_transform(original_values, TransformType.SQRT)
-print(f"  Sqrt-transformed range: {sqrt_values.min():.2f} - {sqrt_values.max():.2f}")
-
-# =============================================================================
-# STEP 4: Fit Multiple Outcomes
-# =============================================================================
-print("\n" + "=" * 70)
-print("[5] BATCH MODEL FITTING")
-print("=" * 70)
-
-# Get non-degenerate continuous outcomes
-from oh_stats.descriptive import get_non_degenerate_outcomes
-from oh_stats.registry import list_outcomes
-
-continuous_outcomes = list_outcomes(outcome_type=OutcomeType.CONTINUOUS)
-print(f"\nRegistered continuous outcomes: {len(continuous_outcomes)}")
-
-# Filter to non-degenerate
-valid_outcomes = get_non_degenerate_outcomes(ds, continuous_outcomes[:10])  # Limit for demo
-print(f"Non-degenerate outcomes: {len(valid_outcomes)}")
-
-# Fit all
-results = fit_all_outcomes(ds, outcomes=valid_outcomes[:5], skip_degenerate=True)
-print(f"\nFitted {len(results)} models")
-
-for name, r in results.items():
-    status = "✓" if r['converged'] else "✗"
-    aic = r['fit_stats'].get('aic', 'NA')
-    icc_val = r['random_effects'].get('icc', 'NA')
-    aic_str = f"{aic:.1f}" if isinstance(aic, (int, float)) else str(aic)
-    icc_str = f"{icc_val:.3f}" if isinstance(icc_val, (int, float)) else str(icc_val)
-    print(f"  {status} {name}: AIC={aic_str}, ICC={icc_str}")
-
-# --- Model accessors demonstration ---
-print("\n--- Model Accessors ---")
-from oh_stats import get_residuals, get_fitted_values, get_random_effects
-
-if result and result['converged']:
-    residuals = get_residuals(result)
-    fitted = get_fitted_values(result)
-    ranef = get_random_effects(result)
-    if residuals is not None:
-        print(f"  Residuals: n={len(residuals)}, mean={residuals.mean():.4f}, std={residuals.std():.4f}")
-    if fitted is not None:
-        print(f"  Fitted values: n={len(fitted)}, range=[{fitted.min():.2f}, {fitted.max():.2f}]")
-    if ranef is not None:
-        print(f"  Random effects (first 3 subjects): {dict(list(ranef.items())[:3])}")
-
-# --- Model comparison demonstration ---
-print("\n--- Model Comparison ---")
-from oh_stats import compare_models
-
-# Fit a simpler model (no side effect) for comparison
-result_simple = fit_lmm(
-    ds,
-    outcome="EMG_intensity.mean_percent_mvc",
-    fixed_effects=["C(day_index)"],  # Only day, no side
-    random_intercept="subject_id",
-)
-if result_simple['converged'] and result['converged']:
-    comparison_df = compare_models([result_simple, result])
-    print(comparison_df[["formula", "aic", "delta_aic"]].to_string(index=False))
-    print(f"  Preferred model (lowest AIC): Row with delta_aic=0")
-
-# =============================================================================
-# STEP 5: Post-hoc Contrasts
-# =============================================================================
-print("\n" + "=" * 70)
-print("[6] POST-HOC CONTRASTS")
-print("=" * 70)
-
-from oh_stats import pairwise_contrasts, compute_emmeans, summarize_contrast_result
-
-# Pairwise day comparisons for primary outcome
-result_main = results.get("EMG_intensity.mean_percent_mvc")
-if result_main and result_main['converged']:
-    print("\n--- Pairwise Day Contrasts: EMG Mean %MVC ---")
-    contrast_result = pairwise_contrasts(result_main, factor="day_index", ds=ds, correction="holm")
-    contrasts_df = contrast_result["contrasts"]  # ContrastResult is a TypedDict
-    print("\nPairwise Contrasts (Holm-corrected):")
-    if contrasts_df is not None and not contrasts_df.empty:
-        cols_to_show = [c for c in ["contrast", "estimate", "std_error", "p_adjusted"] if c in contrasts_df.columns]
-        print(contrasts_df[cols_to_show].head(10).to_string(index=False))
+    # 3B. Daily questionnaire data (if present)
+    print("\n[3B] Daily questionnaires")
+    qs_ds = prepare_daily_questionnaires(profiles)
+    if qs_ds is None:
+        print("  Daily questionnaire data not available")
     else:
-        print("  (No contrasts available)")
-    
-    print("\nEstimated Marginal Means:")
-    emmeans_df = compute_emmeans(result_main, factor="day_index", ds=ds)
-    print(emmeans_df.to_string(index=False))
-    
-    # Effect size demonstration
-    print("\n--- Effect Sizes ---")
-    from oh_stats import compute_effect_size
-    
-    effect = compute_effect_size(result_main, ds=ds)
-    print(f"  Cohen's d (overall): {effect.get('cohens_d', 'NA')}")
-    print(f"  Effect interpretation: {effect.get('interpretation', 'NA')}")
-    
-    # Linear trend test
-    print("\n--- Linear Trend Test ---")
-    from oh_stats import test_linear_trend
-    
-    trend = test_linear_trend(result_main, factor="day_index")
-    if trend:
-        print(f"  Linear coefficient: {trend.get('estimate', 'NA')}")
-        print(f"  p-value: {trend.get('p_value', 'NA')}")
-        print(f"  Significant: {trend.get('significant', 'NA')}")
+        print(f"  Shape: {qs_ds['data'].shape}")
+
+    # 3C. Unified daily metrics (HR + noise + HAR + workload + EMG p90/p50)
+    print("\n[3C] Unified daily metrics (custom)")
+    daily_ds = prepare_daily_metrics(profiles)
+    print(f"  Shape: {daily_ds['data'].shape}")
+    print(f"  Outcomes: {len(daily_ds['outcome_vars'])}")
+    print(daily_ds["data"].head(5).to_string())
+
+    # 3D. Single-instance metrics (metadata + IPAQ/OSPAQ + weekly HAR)
+    print("\n[3D] Single-instance metrics")
+    single_ds = prepare_single_instance_metrics(profiles)
+    print(f"  Shape: {single_ds['data'].shape}")
+    print(f"  Outcomes: {len(single_ds['outcome_vars'])}")
+    print(single_ds["data"].head(5).to_string())
+
+    # Add metadata to daily dataset (e.g., work_type)
+    print("\n[3E] Add subject metadata (work_type)")
+    daily_ds = add_subject_metadata(daily_ds, profiles, fields=["work_type"])
+    print(f"  Columns now include work_type: {'work_type' in daily_ds['data'].columns}")
+
+    # ---------------------------------------------------------------------
+    # STEP 4: Dataset utilities + QA checks
+    # ---------------------------------------------------------------------
+    print_section("[4] DATASET UTILITIES + QA CHECKS")
+
+    print("\n--- describe_dataset(daily_ds) ---")
+    print(describe_dataset(daily_ds))
+
+    print("\n--- validate_dataset(daily_ds) ---")
+    try:
+        validate_dataset(daily_ds)
+        print("  Valid: True")
+    except ValueError as e:
+        print(f"  Valid: False -> {e}")
+
+    print("\n--- Quick Accessors ---")
+    print(f"  N subjects: {get_n_subjects(daily_ds)}")
+    print(f"  N observations: {get_n_observations(daily_ds)}")
+    print(f"  Date range: {get_date_range(daily_ds)}")
+    print(f"  Obs per subject (first 3): {dict(list(get_obs_per_subject(daily_ds).items())[:3])}")
+
+    print("\n--- summarize_outcomes(daily_ds) ---")
+    summary = summarize_outcomes(daily_ds)
+    print(summary.head(10).to_string(index=False))
+
+    print("\n--- check_variance(daily_ds) ---")
+    variance = check_variance(daily_ds)
+    print(variance.head(10).to_string(index=False))
+
+    print("\n--- missingness_report(daily_ds) ---")
+    miss = missingness_report(daily_ds)
+    print(f"Total missing: {miss['summary']['total_missing']} cells ({miss['summary']['pct_missing']:.1f}%)")
+
+    # ---------------------------------------------------------------------
+    # STEP 5: Fit Linear Mixed Models (example H1/H2 patterns)
+    # ---------------------------------------------------------------------
+    print_section("[5] LINEAR MIXED MODELS")
+
+    # Example outcome (if present)
+    outcome = "emg_apdf_active_p90"
+    if outcome in daily_ds["data"].columns:
+        print(f"\n--- Fit LMM: {outcome} ~ work_type + C(day_index) ---")
+        result = fit_lmm(
+            daily_ds,
+            outcome=outcome,
+            fixed_effects=["work_type", "C(day_index)"],
+            random_intercept="subject_id",
+        )
+        print(summarize_lmm_result(result))
+        print(result["coefficients"].to_string(index=False))
     else:
-        print("  (Trend test not available - factor may be categorical)")
+        print(f"\n[Skip] Outcome not found: {outcome}")
+        result = None
 
-# =============================================================================
-# STEP 6: FDR Correction Across Outcomes
-# =============================================================================
-print("\n" + "=" * 70)
-print("[7] MULTIPLICITY CORRECTION (FDR)")
-print("=" * 70)
+    # Demonstrate transforms
+    print("\n--- Transform demo (LOG, SQRT) ---")
+    if outcome in daily_ds["data"].columns:
+        values = daily_ds["data"][outcome].dropna()
+        if not values.empty:
+            log_vals = apply_transform(values, TransformType.LOG)
+            sqrt_vals = apply_transform(values, TransformType.SQRT)
+            print(f"  Original range: {values.min():.4f} - {values.max():.4f}")
+            print(f"  LOG range: {log_vals.min():.4f} - {log_vals.max():.4f}")
+            print(f"  SQRT range: {sqrt_vals.min():.4f} - {sqrt_vals.max():.4f}")
 
-from oh_stats import apply_fdr, apply_holm, adjust_pvalues, significant_outcomes, fdr_summary
+    # Batch fit a few outcomes
+    print("\n--- Batch fitting (first 5 numeric outcomes) ---")
+    if daily_ds["outcome_vars"]:
+        results = fit_all_outcomes(daily_ds, outcomes=daily_ds["outcome_vars"][:5])
+        for name, r in results.items():
+            status = "✓" if r["converged"] else "✗"
+            print(f"  {status} {name} (AIC={r['fit_stats'].get('aic', 'NA')})")
+    else:
+        results = {}
 
-# Apply FDR correction for day_index effect across outcomes
-fdr_results = apply_fdr(results, term="day_index", method="fdr_bh")
+    # ---------------------------------------------------------------------
+    # STEP 6: Post-hoc contrasts + effect sizes
+    # ---------------------------------------------------------------------
+    print_section("[6] POST-HOC CONTRASTS + EFFECT SIZES")
 
-print("\n--- FDR Results (Benjamini-Hochberg) ---")
-print(fdr_results[["outcome", "p_raw", "p_adjusted", "significant"]].to_string(index=False))
+    if result and result["converged"]:
+        print("\n--- Pairwise contrasts on day_index ---")
+        contrast_result = pairwise_contrasts(result, factor="day_index", ds=daily_ds, correction="holm")
+        contrasts_df = contrast_result.get("contrasts")
+        if contrasts_df is not None and not contrasts_df.empty:
+            print(contrasts_df.head(10).to_string(index=False))
+        else:
+            print("  No contrasts available")
 
-# Summary
-n_sig = fdr_results['significant'].sum()
-n_total = len(fdr_results)
-print(f"\nSignificant outcomes: {n_sig}/{n_total} (FDR < 0.05)")
+        print("\n--- Estimated marginal means ---")
+        emmeans_df = compute_emmeans(result, factor="day_index", ds=daily_ds)
+        print(emmeans_df.to_string(index=False))
 
-# FDR summary helper
-print("\n--- FDR Summary ---")
-fdr_summ = fdr_summary(fdr_results)
-print(fdr_summ)  # Returns formatted string
+        print("\n--- Effect size ---")
+        effect = compute_effect_size(result, ds=daily_ds)
+        print(effect)
 
-# Holm correction comparison
-print("\n--- Holm Correction (More Conservative) ---")
-holm_results = apply_holm(results, term="day_index")
-print(holm_results[["outcome", "p_raw", "p_adjusted", "significant"]].to_string(index=False))
-n_sig_holm = holm_results['significant'].sum()
-print(f"\nSignificant outcomes (Holm): {n_sig_holm}/{n_total}")
+        print("\n--- Linear trend test ---")
+        trend = test_linear_trend(result, factor="day_index")
+        print(trend)
 
-# Get significant outcomes list
-print("\n--- Significant Outcomes Helper ---")
-sig_list = significant_outcomes(fdr_results)
-print(f"  Significant (FDR): {sig_list if sig_list else 'None'}")
+    # ---------------------------------------------------------------------
+    # STEP 7: Multiplicity correction
+    # ---------------------------------------------------------------------
+    print_section("[7] MULTIPLICITY CORRECTION")
 
-# Raw p-value adjustment demo
-print("\n--- adjust_pvalues() Demo ---")
-raw_pvals = [0.001, 0.02, 0.04, 0.06, 0.10]
-adj_pvals = adjust_pvalues(raw_pvals, method="fdr_bh")
-print(f"  Raw: {raw_pvals}")
-print(f"  Adjusted (FDR): {[round(p, 4) for p in adj_pvals]}")
+    if results:
+        fdr_results = apply_fdr(results, term="day_index", method="fdr_bh")
+        print("\n--- FDR (BH) ---")
+        print(fdr_results.head(10).to_string(index=False))
+        print(fdr_summary(fdr_results))
 
-# =============================================================================
-# STEP 7: Model Diagnostics
-# =============================================================================
-print("\n" + "=" * 70)
-print("[8] MODEL DIAGNOSTICS")
-print("=" * 70)
+        holm_results = apply_holm(results, term="day_index")
+        print("\n--- Holm (per-outcome) ---")
+        print(holm_results.head(10).to_string(index=False))
 
-from oh_stats import residual_diagnostics, check_assumptions, summarize_diagnostics
+        print("\n--- Significant outcomes (FDR) ---")
+        print(significant_outcomes(fdr_results))
 
-if result_main and result_main['converged']:
-    print("\n--- Diagnostics: EMG Mean %MVC ---")
-    diag = residual_diagnostics(result_main)
-    print(summarize_diagnostics(diag))
-    
-    print("\nResidual Normality:")
-    norm_result = diag.get('residuals_normality', {})
-    shapiro_p = norm_result.get('shapiro_p', 'NA')
-    print(f"  Shapiro-Wilk p: {shapiro_p:.4f}" if isinstance(shapiro_p, (int, float)) else f"  Shapiro-Wilk p: {shapiro_p}")
-    print(f"  Is normal: {norm_result.get('is_normal', 'NA')}")
-    
-    print("\nOutliers:")
-    outlier_result = diag.get('outliers', {})
-    n_outliers = outlier_result.get('count', 'NA')
-    print(f"  Count: {n_outliers}")
-    print(f"  Percent: {outlier_result.get('percent', 'NA')}")
-    
-    print("\nHomoscedasticity:")
-    homo_result = diag.get('homoscedasticity', {})
-    print(f"  Levene p: {homo_result.get('levene_p', 'NA')}")
-    print(f"  Is homoscedastic: {homo_result.get('is_homoscedastic', 'NA')}")
-    
-    # Diagnostic data accessor (for plotting)
-    print("\n--- get_diagnostic_data() ---")
-    from oh_stats import get_diagnostic_data
-    diag_data = get_diagnostic_data(result_main)  # Takes LMMResult, not DiagnosticsResult
-    if diag_data is not None:
-        residual_df, qq_df = diag_data
-        print(f"  Residual DataFrame: {residual_df.shape}")
-        print(f"  QQ DataFrame: {qq_df.shape}")
-        print(f"  Columns: {list(residual_df.columns)}")
+    print("\n--- Hypothesis-level Holm demo ---")
+    hypotheses = {
+        "H1": {"p_value": 0.01},
+        "H2": {"p_value": 0.03},
+        "H3": {"p_value": 0.20},
+        "H4": {"p_value": 0.04},
+        "H6": {"p_value": 0.50},
+    }
+    print(apply_holm_hypotheses(hypotheses))
 
-# =============================================================================
-# STEP 8: Report Generation
-# =============================================================================
-print("\n" + "=" * 70)
-print("[9] REPORT GENERATION")
-print("=" * 70)
+    # ---------------------------------------------------------------------
+    # STEP 8: Diagnostics
+    # ---------------------------------------------------------------------
+    print_section("[8] MODEL DIAGNOSTICS")
 
-from oh_stats import descriptive_table, coefficient_table, results_summary
+    if result and result["converged"]:
+        diag = residual_diagnostics(result)
+        print(summarize_diagnostics(diag))
+        print(diag)
 
-# Table 1 style
-print("\n--- Table 1: Descriptive Statistics ---")
-table1 = descriptive_table(ds, outcomes=primary_outcomes[:3])
-print(table1.to_string(index=False))
+    # ---------------------------------------------------------------------
+    # STEP 9: Reporting + export
+    # ---------------------------------------------------------------------
+    print_section("[9] REPORTING + EXPORT")
 
-# Coefficient table
-if result_main and result_main['converged']:
-    print("\n--- Coefficient Table ---")
-    coef_table = coefficient_table(result_main)
-    print(coef_table.to_string(index=False))
+    if daily_ds["outcome_vars"]:
+        table1 = descriptive_table(daily_ds, outcomes=daily_ds["outcome_vars"][:3])
+        print("\n--- Table 1 ---")
+        print(table1.to_string(index=False))
 
-# Results summary
-print("\n--- Results Summary ---")
-res_summary = results_summary(results, fdr_results)
-print(res_summary.to_string(index=False))
+        if result and result["converged"]:
+            coef_table = coefficient_table(result)
+            print("\n--- Coefficients ---")
+            print(coef_table.to_string(index=False))
 
-# Multiple coefficient table
-print("\n--- Coefficient Table (Multiple Models) ---")
-from oh_stats import coefficient_table_multiple
-coef_multi = coefficient_table_multiple(results)
-print(coef_multi.head(10).to_string(index=False))
+        if results:
+            res_summary = results_summary(results, apply_fdr(results))
+            print("\n--- Results summary ---")
+            print(res_summary.head(10).to_string(index=False))
 
-# Formatted descriptive table
-print("\n--- Formatted Descriptive Table ---")
-from oh_stats import descriptive_table_formatted
-table1_fmt = descriptive_table_formatted(ds, outcomes=primary_outcomes[:2])
-print(table1_fmt.to_string(index=False))
+            coef_multi = coefficient_table_multiple(results)
+            print("\n--- Multiple coefficients ---")
+            print(coef_multi.head(10).to_string(index=False))
 
-# =============================================================================
-# STEP 9A: Export Functions
-# =============================================================================
-print("\n" + "=" * 70)
-print("[9A] EXPORT FUNCTIONS")
-print("=" * 70)
+        formatted = descriptive_table_formatted(daily_ds, outcomes=daily_ds["outcome_vars"][:2])
+        print("\n--- Formatted Table 1 ---")
+        print(formatted.to_string(index=False))
 
-from oh_stats import export_to_csv, export_to_latex, print_results_summary, print_coefficient_summary
-import tempfile
+    # Export examples
+    import tempfile
 
-# Export to CSV (to temp file for demo)
-print("\n--- export_to_csv() ---")
-with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
-    csv_path = f.name
-export_to_csv(res_summary, csv_path)
-print(f"  Exported results summary to: {csv_path}")
-print(f"  Preview:")
-with open(csv_path, 'r') as f:
-    lines = f.readlines()[:4]
-    for line in lines:
-        print(f"    {line.strip()}")
+    if results:
+        res_summary = results_summary(results, apply_fdr(results))
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+            export_to_csv(res_summary, f.name)
+            print(f"\nExported CSV: {f.name}")
 
-# Export to LaTeX
-print("\n--- export_to_latex() ---")
-with tempfile.NamedTemporaryFile(suffix=".tex", delete=False) as f:
-    tex_path = f.name
-export_to_latex(table1, tex_path)
-print(f"  Exported descriptive table to: {tex_path}")
-with open(tex_path, 'r') as f:
-    content = f.read()
-    print(f"  Preview (first 200 chars):")
-    print(f"    {content[:200]}...")
+    if daily_ds["outcome_vars"]:
+        table1 = descriptive_table(daily_ds, outcomes=daily_ds["outcome_vars"][:3])
+        with tempfile.NamedTemporaryFile(suffix=".tex", delete=False) as f:
+            try:
+                export_to_latex(table1, f.name)
+                print(f"Exported LaTeX: {f.name}")
+            except ImportError as e:
+                print(f"LaTeX export skipped (missing dependency): {e}")
 
-# Print helpers
-print("\n--- print_results_summary() ---")
-print_results_summary(results, fdr_results)
+    if results:
+        print("\n--- print_results_summary() ---")
+        print_results_summary(results, apply_fdr(results))
 
-if result_main and result_main['converged']:
-    print("\n--- print_coefficient_summary() ---")
-    print_coefficient_summary(result_main)
+    if result and result["converged"]:
+        print("\n--- print_coefficient_summary() ---")
+        print_coefficient_summary(result)
 
-# =============================================================================
-# STEP 9BB: Registry Demonstration
-# =============================================================================
-print("\n" + "=" * 70)
-print("[10] OUTCOME REGISTRY")
-print("=" * 70)
+    # ---------------------------------------------------------------------
+    # STEP 10: Registry inspection
+    # ---------------------------------------------------------------------
+    print_section("[10] OUTCOME REGISTRY")
 
-from oh_stats.registry import (
-    list_outcomes, get_outcome_info, register_outcome,
-    OutcomeType, AnalysisLevel, TransformType
-)
+    print(f"Total outcomes: {len(list_outcomes())}")
+    print(f"Continuous: {len(list_outcomes(outcome_type=OutcomeType.CONTINUOUS))}")
+    print(f"Proportion: {len(list_outcomes(outcome_type=OutcomeType.PROPORTION))}")
+    print(f"Count: {len(list_outcomes(outcome_type=OutcomeType.COUNT))}")
 
-print("\n--- Registry Contents ---")
-print(f"Total registered outcomes: {len(list_outcomes())}")
-print(f"Continuous: {len(list_outcomes(outcome_type=OutcomeType.CONTINUOUS))}")
-print(f"Proportion: {len(list_outcomes(outcome_type=OutcomeType.PROPORTION))}")
-print(f"Count: {len(list_outcomes(outcome_type=OutcomeType.COUNT))}")
-print(f"Primary: {len(list_outcomes(primary_only=True))}")
+    info = get_outcome_info("EMG_apdf.active.p50")
+    print("\n--- Outcome Info: EMG_apdf.active.p50 ---")
+    if info:
+        print(f"  Type: {info['outcome_type'].name}")
+        print(f"  Level: {info['level']}")
+        print(f"  Transform: {info['transform'].name}")
+        print(f"  Is Primary: {info.get('is_primary', False)}")
+        print(f"  Description: {info.get('description', 'N/A')}")
+    else:
+        print("  (Not found)")
 
-# Show info for a specific outcome
-info = get_outcome_info("EMG_apdf.active.p50")
-print(f"\n--- Outcome Info: EMG_apdf.active.p50 ---")
-if info:
-    print(f"  Type: {info['outcome_type'].name}")
-    print(f"  Level: {info['level']}")
-    print(f"  Transform: {info['transform'].name}")
-    print(f"  Is Primary: {info.get('is_primary', False)}")
-    print(f"  Description: {info.get('description', 'N/A')}")
-else:
-    print("  (Not found in registry)")
+    print_section("PIPELINE COMPLETE")
 
-# =============================================================================
-# DONE
-# =============================================================================
-print("\n" + "=" * 70)
-print("PIPELINE DEMONSTRATION COMPLETE")
-print("=" * 70)
-print("""
-This script demonstrated the full oh_stats pipeline:
 
-✓ Data Discovery: discover_sensors, discover_questionnaires, get_profile_summary
-✓ Data Preparation: prepare_daily_emg, prepare_daily_questionnaires
-✓ Dataset Utilities: describe_dataset, validate_dataset, subset_dataset, accessors
-✓ Descriptive Stats: summarize_outcomes, check_normality, check_variance, missingness
-✓ Transforms: apply_transform (log, sqrt, etc.)
-✓ LMM Fitting: fit_lmm, fit_all_outcomes, model accessors
-✓ Model Comparison: compare_models (AIC, likelihood ratio test)
-✓ Post-hoc: pairwise_contrasts, compute_emmeans, compute_effect_size, test_linear_trend
-✓ Multiplicity: apply_fdr, apply_holm, adjust_pvalues, significant_outcomes
-✓ Diagnostics: residual_diagnostics, check_assumptions, get_diagnostic_data
-✓ Reporting: descriptive_table, coefficient_table, results_summary
-✓ Export: export_to_csv, export_to_latex, print helpers
-✓ Registry: list_outcomes, get_outcome_info, register_outcome
+    # ---------------------------------------------------------------------
+    # STEP 11: Hypothesis Testing (H1–H6)
+    # ---------------------------------------------------------------------
+    print_section("[11] HYPOTHESIS TESTING (H1–H6)")
 
-Not demonstrated (specialized use cases):
-- prepare_from_dataframe (for pre-extracted data)
-- prepare_sensor_data (generic sensor preparation)
-- prepare_weekly_emg, prepare_baseline_questionnaires (alternative aggregations)
-- compute_composite_score, align_sensor_questionnaire (data harmonization)
-- reset_registry (testing only)
-""")
+    hypothesis_results = {}
+
+    # H1: FO vs BO differ in daily EMG p90 (right side only)
+    if "emg_apdf_active_p90" in daily_ds["data"].columns and "work_type" in daily_ds["data"].columns:
+        print("\n[H1] FO vs BO on EMG p90 (daily)")
+        h1_result = fit_lmm(
+            daily_ds,
+            outcome="emg_apdf_active_p90",
+            fixed_effects=["work_type", "C(day_index)"],
+            random_intercept="subject_id",
+        )
+        h1_p = h1_result["coefficients"].loc[
+            h1_result["coefficients"]["term"].str.contains("work_type", case=False, na=False),
+            "p_value",
+        ]
+        h1_p = float(h1_p.iloc[0]) if not h1_p.empty else np.nan
+        hypothesis_results["H1"] = {"p_value": h1_p, "note": "FO vs BO on EMG p90"}
+        print(summarize_lmm_result(h1_result))
+    else:
+        print("\n[H1] Skipped (missing emg_apdf_active_p90 or work_type)")
+
+    # H2: FO vs BO differ in daily workload (stress proxy)
+    if "workload_mean" in daily_ds["data"].columns and "work_type" in daily_ds["data"].columns:
+        print("\n[H2] FO vs BO on daily workload mean")
+        if daily_ds["data"]["workload_mean"].dropna().empty:
+            print("[H2] Skipped (workload_mean has no non-missing values)")
+        else:
+            h2_result = fit_lmm(
+                daily_ds,
+                outcome="workload_mean",
+                fixed_effects=["work_type", "C(day_index)"],
+                random_intercept="subject_id",
+            )
+            if h2_result["coefficients"].empty:
+                print("[H2] Skipped (model produced no coefficients)")
+            else:
+                h2_p = h2_result["coefficients"].loc[
+                    h2_result["coefficients"]["term"].str.contains("work_type", case=False, na=False),
+                    "p_value",
+                ]
+                h2_p = float(h2_p.iloc[0]) if not h2_p.empty else np.nan
+                hypothesis_results["H2"] = {"p_value": h2_p, "note": "FO vs BO on workload mean"}
+                print(summarize_lmm_result(h2_result))
+    else:
+        print("\n[H2] Skipped (missing workload_mean or work_type)")
+
+    # H3: Daily stress predicts daily sitting proportion
+    if "workload_mean" in daily_ds["data"].columns and "har_sentado_prop" in daily_ds["data"].columns:
+        print("\n[H3] Daily workload predicts daily sitting proportion")
+        df_h3 = daily_ds["data"].copy()
+        if df_h3["workload_mean"].dropna().empty:
+            print("[H3] Skipped (workload_mean has no non-missing values)")
+        else:
+            eps = 1e-6
+            df_h3["har_sit_logit"] = np.log(
+                df_h3["har_sentado_prop"].clip(eps, 1 - eps) /
+                (1 - df_h3["har_sentado_prop"].clip(eps, 1 - eps))
+            )
+            h3_ds = prepare_from_dataframe(
+                df=df_h3[["subject_id", "date", "har_sit_logit", "workload_mean", "day_index"]].dropna(),
+                sensor="har",
+                level="daily",
+                id_col="subject_id",
+                date_col="date",
+                outcome_cols=["har_sit_logit"],
+            )
+            if h3_ds["data"].empty:
+                print("[H3] Skipped (no valid rows after logit + dropna)")
+            else:
+                h3_result = fit_lmm(
+                    h3_ds,
+                    outcome="har_sit_logit",
+                    fixed_effects=["workload_mean", "C(day_index)"],
+                    random_intercept="subject_id",
+                )
+                if h3_result["coefficients"].empty:
+                    print("[H3] Skipped (model produced no coefficients)")
+                else:
+                    h3_p = h3_result["coefficients"].loc[
+                        h3_result["coefficients"]["term"].str.contains("workload_mean", case=False, na=False),
+                        "p_value",
+                    ]
+                    h3_p = float(h3_p.iloc[0]) if not h3_p.empty else np.nan
+                    hypothesis_results["H3"] = {"p_value": h3_p, "note": "workload -> sitting proportion"}
+                    print(summarize_lmm_result(h3_result))
+    else:
+        print("\n[H3] Skipped (missing workload_mean or har_sentado_prop)")
+
+    # H4: OSPAQ sitting predicts objective sitting (subject-level)
+    if "ospaq_sitting_frac" in single_ds["data"].columns and "har_sentado_prop" in daily_ds["data"].columns:
+        print("\n[H4] OSPAQ sitting vs objective sitting (subject-level)")
+        obj = daily_ds["data"].copy()
+        obj = obj.dropna(subset=["har_sentado_prop"])
+        obj_subject = obj.groupby("subject_id")["har_sentado_prop"].mean().reset_index()
+        df_h4 = single_ds["data"][["subject_id", "ospaq_sitting_frac", "work_type"]].merge(
+            obj_subject,
+            on="subject_id",
+            how="inner",
+        )
+        df_h4 = df_h4.dropna(subset=["ospaq_sitting_frac", "har_sentado_prop"])
+        if not df_h4.empty:
+            X = df_h4[["ospaq_sitting_frac"]]
+            if "work_type" in df_h4.columns:
+                X = pd.concat([X, pd.get_dummies(df_h4["work_type"], drop_first=True)], axis=1)
+            X = sm.add_constant(X, has_constant="add")
+            y = df_h4["har_sentado_prop"]
+            model = sm.OLS(y, X).fit()
+            h4_p = model.pvalues.get("ospaq_sitting_frac", np.nan)
+            hypothesis_results["H4"] = {"p_value": float(h4_p), "note": "OSPAQ -> objective sitting"}
+            print(model.summary().as_text().splitlines()[0])
+        else:
+            print("[H4] Skipped (no overlap between OSPAQ and objective sitting)")
+    else:
+        print("\n[H4] Skipped (missing OSPAQ or objective sitting data)")
+
+    # H5: Daily physiological predictors of EMG p90 (exploratory)
+    predictors = [c for c in ["hr_ratio_mean", "noise_mean"] if c in daily_ds["data"].columns]
+    if "emg_apdf_active_p90" in daily_ds["data"].columns and predictors:
+        print("\n[H5] Physiological predictors of EMG p90 (exploratory)")
+        h5_fixed = predictors + ["C(day_index)"]
+        h5_result = fit_lmm(
+            daily_ds,
+            outcome="emg_apdf_active_p90",
+            fixed_effects=h5_fixed,
+            random_intercept="subject_id",
+        )
+        coeffs = h5_result.get("coefficients")
+        if isinstance(coeffs, pd.DataFrame) and "term" in coeffs.columns:
+            h5_p = coeffs.loc[
+                coeffs["term"].str.contains(predictors[0], case=False, na=False),
+                "p_value",
+            ]
+            h5_p = float(h5_p.iloc[0]) if not h5_p.empty else np.nan
+            hypothesis_results["H5"] = {"p_value": h5_p, "note": "Physiological predictors"}
+        else:
+            hypothesis_results["H5"] = {"p_value": np.nan, "note": "No coefficients returned"}
+        print(summarize_lmm_result(h5_result))
+    else:
+        print("\n[H5] Skipped (missing EMG p90 or predictors)")
+
+    # H6: FO vs BO differ in posture metric (if available)
+    posture_cols = [c for c in daily_ds["data"].columns if c.startswith("posture_")]
+    if posture_cols and "work_type" in daily_ds["data"].columns:
+        posture_outcome = posture_cols[0]
+        print(f"\n[H6] FO vs BO on posture metric: {posture_outcome}")
+        h6_result = fit_lmm(
+            daily_ds,
+            outcome=posture_outcome,
+            fixed_effects=["work_type", "C(day_index)"],
+            random_intercept="subject_id",
+        )
+        h6_p = h6_result["coefficients"].loc[
+            h6_result["coefficients"]["term"].str.contains("work_type", case=False, na=False),
+            "p_value",
+        ]
+        h6_p = float(h6_p.iloc[0]) if not h6_p.empty else np.nan
+        hypothesis_results["H6"] = {"p_value": h6_p, "note": "FO vs BO on posture"}
+        print(summarize_lmm_result(h6_result))
+    else:
+        print("\n[H6] Skipped (no posture metric available)")
+
+    if hypothesis_results:
+        print("\n--- Holm correction across hypotheses ---")
+        print(apply_holm_hypotheses(hypothesis_results))
+
+
+if __name__ == "__main__":
+    main()

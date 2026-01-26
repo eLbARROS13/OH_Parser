@@ -27,7 +27,7 @@ print("=" * 60)
 print("LOADING PROFILES")
 print("=" * 60)
 
-OH_PROFILES_PATH = r"/Volumes/NO NAME/Backup PrevOccupAI_PLUS Data/OH_profiles"
+OH_PROFILES_PATH = r"c:\Users\gonba\oh_parser_project\test_data"
 profiles = load_profiles(OH_PROFILES_PATH)
 
 subjects = list_subjects(profiles)

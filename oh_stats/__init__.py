@@ -85,6 +85,10 @@ from .prepare import (
     # EMG convenience wrappers (common use case)
     prepare_daily_emg,
     prepare_weekly_emg,
+    prepare_daily_metrics,
+    prepare_single_instance_metrics,
+    add_subject_metadata,
+    aggregate_daily_to_subject,
     # Questionnaire preparation (special nested structure)
     prepare_daily_questionnaires,
     prepare_baseline_questionnaires,
@@ -139,6 +143,7 @@ from .multiplicity import (
     adjust_pvalues,
     apply_fdr,
     apply_holm,
+    apply_holm_hypotheses,
     significant_outcomes,
     fdr_summary,
 )
@@ -213,6 +218,10 @@ __all__ = [
     # EMG convenience wrappers
     "prepare_daily_emg",
     "prepare_weekly_emg",
+    "prepare_daily_metrics",
+    "prepare_single_instance_metrics",
+    "add_subject_metadata",
+    "aggregate_daily_to_subject",
     # Questionnaire preparation
     "prepare_daily_questionnaires",
     "prepare_baseline_questionnaires",
@@ -259,6 +268,7 @@ __all__ = [
     "adjust_pvalues",
     "apply_fdr",
     "apply_holm",
+    "apply_holm_hypotheses",
     "significant_outcomes",
     "fdr_summary",
     

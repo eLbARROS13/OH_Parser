@@ -13,7 +13,7 @@ from .loader import load_profiles, list_subjects, get_profile
 from .extract import inspect_profile, get_available_paths, summarize_profiles
 
 
-DEFAULT_OH_DIRECTORY = r"E:\Backup PrevOccupAI_PLUS Data\OH_profiles"
+DEFAULT_OH_DIRECTORY = r"E:\Backup PrevOccupAI_PLUS Data\OH_profiles_2"
 
 
 def main():

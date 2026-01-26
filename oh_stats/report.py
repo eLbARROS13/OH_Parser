@@ -152,8 +152,11 @@ def coefficient_table(
     
     # Format estimate with CI
     df["Estimate (95% CI)"] = df.apply(
-        lambda r: f"{r['estimate']:{format_estimate[1:-1]}} ({r['ci_lower']:{format_ci[1:-1]}}, {r['ci_upper']:{format_ci[1:-1]}})",
-        axis=1
+        lambda r: (
+            f"{format_estimate.format(r['estimate'])} "
+            f"({format_ci.format(r['ci_lower'])}, {format_ci.format(r['ci_upper'])})"
+        ),
+        axis=1,
     )
     
     # Format p-value with significance stars
@@ -167,7 +170,7 @@ def coefficient_table(
             stars = "**"
         elif p < 0.05:
             stars = "*"
-        return f"{p:{format_p[1:-1]}}{stars}"
+        return f"{format_p.format(p)}{stars}"
     
     df["P-value"] = df["p_value"].apply(format_pval)
     

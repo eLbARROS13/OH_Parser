@@ -528,6 +528,43 @@ pain_ds = prepare_daily_pain(profiles)
 workload_ds = prepare_daily_workload(profiles)
 ```
 
+### Prepare Unified Daily Metrics (Sensors + Workload)
+
+```python
+from oh_stats import prepare_daily_metrics
+
+# Unified daily dataset with HR, noise, HAR, EMG, and workload
+daily_ds = prepare_daily_metrics(profiles)
+print(daily_ds["data"].head())
+```
+
+**Included metrics (when available):**
+
+- Workload daily mean (5 fixed items)
+- Human activities: sitting/standing/walking durations, sitting proportion, steps
+- Heart rate: duration‑weighted daily mean/std of HR ratio
+- Noise: duration‑weighted daily mean/std
+- EMG: right‑side daily p90/p50 (scaled to 0–1)
+
+**HR duration fallback:** If watch times are missing, per‑day durations fallback to the mean of available HR session durations.
+
+### Prepare Single‑Instance Metrics (Metadata + IPAQ/OSPAQ)
+
+```python
+from oh_stats import prepare_single_instance_metrics
+
+# Single-instance metrics (metadata + baseline questionnaires)
+single_ds = prepare_single_instance_metrics(profiles)
+print(single_ds["data"].head())
+```
+
+**Included metrics (when available):**
+
+- Metadata (all fields under meta_data)
+- IPAQ: ordinal level (leve/moderada/alta → 1/2/3) + total_met
+- OSPAQ: sitting percentage scaled to 0–1
+- Weekly HAR total duration (summed across days)
+
 ---
 
 ## 10. Step 3: Check Data Quality
@@ -1051,6 +1088,8 @@ from oh_parser import load_profiles
 from oh_stats import (
     get_profile_summary,
     prepare_daily_emg,
+    prepare_daily_metrics,
+    prepare_single_instance_metrics,
     summarize_outcomes,
     check_variance,
     fit_all_outcomes,
@@ -1063,6 +1102,12 @@ print(get_profile_summary(profiles))
 
 # 2. Prepare
 ds = prepare_daily_emg(profiles, side="average")
+
+# Or unified daily metrics
+daily_ds = prepare_daily_metrics(profiles)
+
+# Single-instance metrics
+single_ds = prepare_single_instance_metrics(profiles)
 
 # 3. Check Quality
 print(summarize_outcomes(ds))

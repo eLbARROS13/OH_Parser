@@ -172,7 +172,11 @@ def apply_transform(
         return np.sqrt(values)
     
     elif transform == TransformType.LOGIT:
-        # Require values in (0, 1)
+        # Require values in (0, 1); rescale if provided as percent
+        max_val = values.max(skipna=True)
+        if max_val > 1 and max_val <= 100:
+            warnings.warn("LOGIT transform expects proportions in [0,1]. Rescaling from percent.")
+            values = values / 100.0
         eps = 1e-6
         values = values.clip(lower=eps, upper=1 - eps)
         return np.log(values / (1 - values))
@@ -331,12 +335,42 @@ def fit_lmm(
     # Extract coefficients
     coef_df = _extract_coefficients(result)
     
+    # Compute LRT for day_index effect (if applicable and ML)
+    lrt_stat = np.nan
+    lrt_df = np.nan
+    lrt_pvalue = np.nan
+
+    if formula is None and not reml:
+        if fixed_effects and any(term in fixed_effects for term in ["C(day_index)", "day_index"]):
+            reduced_effects = [
+                term for term in fixed_effects
+                if term not in ["C(day_index)", "day_index"]
+            ]
+            reduced_formula = f"{outcome_formula} ~ 1" if not reduced_effects else f"{outcome_formula} ~ {' + '.join(reduced_effects)}"
+
+            try:
+                reduced_model = mixedlm(
+                    reduced_formula,
+                    data=df,
+                    groups=df[random_intercept],
+                    **kwargs,
+                )
+                reduced_result = reduced_model.fit(reml=False)
+                lrt_stat, lrt_df, lrt_pvalue = _compute_lrt(result, reduced_result)
+            except Exception as e:
+                model_warnings.append(f"LRT failed: {str(e)}")
+    elif reml:
+        model_warnings.append("LRT skipped because REML=True (use ML for LRT)")
+
     # Extract fit statistics
     fit_stats = {
         "aic": result.aic,
         "bic": result.bic,
         "llf": result.llf,
         "scale": result.scale,
+        "lrt_stat": lrt_stat,
+        "lrt_df": lrt_df,
+        "lrt_pvalue": lrt_pvalue,
     }
     
     # Extract random effects variance
@@ -389,6 +423,27 @@ def _extract_coefficients(result: MixedLMResults) -> pd.DataFrame:
     summary_df = summary_df.rename(columns={"index": "term"})
     
     return summary_df
+
+
+def _compute_lrt(
+    full_result: MixedLMResults,
+    reduced_result: MixedLMResults,
+) -> Tuple[float, float, float]:
+    """Compute likelihood ratio test between full and reduced models."""
+    try:
+        lrt_stat = 2 * (full_result.llf - reduced_result.llf)
+        df_full = getattr(full_result, "df_modelwc", None)
+        df_red = getattr(reduced_result, "df_modelwc", None)
+        if df_full is None or df_red is None:
+            df_diff = len(full_result.fe_params) - len(reduced_result.fe_params)
+        else:
+            df_diff = df_full - df_red
+        if df_diff <= 0:
+            return (np.nan, np.nan, np.nan)
+        pvalue = stats.chi2.sf(lrt_stat, df_diff)
+        return (float(lrt_stat), float(df_diff), float(pvalue))
+    except Exception:
+        return (np.nan, np.nan, np.nan)
 
 
 # =============================================================================

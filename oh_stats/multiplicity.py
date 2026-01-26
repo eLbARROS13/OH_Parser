@@ -186,6 +186,7 @@ def apply_fdr(
     term: str = "day_index",
     method: CorrectionMethod = "fdr_bh",
     alpha: float = 0.05,
+    use_lrt: bool = True,
 ) -> pd.DataFrame:
     """
     Apply FDR correction across multiple LMM outcomes.
@@ -214,6 +215,16 @@ def apply_fdr(
     for result in results_list:
         if result["coefficients"].empty:
             continue
+
+        if use_lrt:
+            lrt_p = result.get("fit_stats", {}).get("lrt_pvalue", np.nan)
+            if not np.isnan(lrt_p):
+                rows.append({
+                    "outcome": result["outcome"],
+                    "term": "lrt",
+                    "p_raw": lrt_p,
+                })
+                continue
         
         # Find the term (partial match for categorical encoding)
         term_mask = result["coefficients"]["term"].str.contains(term, case=False, na=False)
@@ -258,6 +269,33 @@ def apply_fdr(
     # Sort by adjusted p-value
     df = df.sort_values("p_adjusted").reset_index(drop=True)
     
+    return df
+
+
+def apply_holm_hypotheses(
+    hypotheses: Union[List[Dict[str, float]], Dict[str, Dict[str, float]]],
+    pvalue_key: str = "p_value",
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    """
+    Apply Holm correction across hypothesis-level p-values.
+    """
+    if isinstance(hypotheses, dict):
+        rows = [
+            {"hypothesis": k, "p_raw": v.get(pvalue_key, np.nan)}
+            for k, v in hypotheses.items()
+        ]
+    else:
+        rows = []
+        for i, h in enumerate(hypotheses, start=1):
+            rows.append({
+                "hypothesis": h.get("id", f"H{i}"),
+                "p_raw": h.get(pvalue_key, np.nan),
+            })
+
+    df = pd.DataFrame(rows)
+    df["p_adjusted"] = adjust_pvalues(df["p_raw"].values, method="holm", alpha=alpha)
+    df["significant"] = df["p_adjusted"] < alpha
     return df
 
 
