@@ -12,7 +12,7 @@ Architecture Note:
     This module uses dictionaries instead of classes for data structures
     to maintain consistency with the oh_parser project style.
     
-    AnalysisDataset is a TypedDict containing:
+    AnalysisDataset is a dict containing:
     - data: pandas DataFrame with tidy long-format data
     - outcome_vars: list of outcome column names
     - id_var, time_var: identifier columns
@@ -22,7 +22,7 @@ Architecture Note:
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import warnings
 
 import pandas as pd
@@ -65,29 +65,10 @@ def _parse_date_column(series: pd.Series) -> pd.Series:
 
 
 # =============================================================================
-# Analysis Dataset TypedDict
+# Analysis Dataset (dict)
 # =============================================================================
 
-class AnalysisDataset(TypedDict):
-    """
-    Container for analysis-ready data with metadata.
-    
-    Keys:
-        data: Tidy long-format DataFrame
-        outcome_vars: List of outcome column names
-        id_var: Subject identifier column (default: "subject_id")
-        time_var: Time/date column (default: "date")
-        grouping_vars: Additional grouping columns (e.g., ["side"])
-        sensor: Source sensor (e.g., "emg", "heart_rate")
-        level: Analysis level (e.g., "daily", "session")
-    """
-    data: pd.DataFrame
-    outcome_vars: List[str]
-    id_var: str
-    time_var: str
-    grouping_vars: List[str]
-    sensor: str
-    level: str
+AnalysisDataset = Dict[str, Any]
 
 
 def create_analysis_dataset(
@@ -1204,6 +1185,50 @@ def _prepare_daily_noise_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _prepare_daily_posture_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
+    """Extract daily posture metrics (sway, ellipse area, velocity)."""
+    from oh_parser import extract_nested
+
+    df = extract_nested(
+        profiles,
+        base_path="sensor_metrics.posture",
+        level_names=["date", "session"],
+        value_paths=[
+            "posture_95_confidence_ellipse_area",
+            "posture_total_sway_length",
+            "posture_average_sway_velocity",
+            "posture_ap_range",
+            "posture_ml_range",
+            "posture_ratio_range",
+            "posture_sway_area_per_second",
+        ],
+        flatten_values=True,
+    )
+
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "subject_id", "date", 
+            "posture_95_confidence_ellipse_area",
+            "posture_total_sway_length",
+            "posture_average_sway_velocity",
+        ])
+
+    df["date"] = _parse_date_column(df["date"])
+    df = df.dropna(subset=["date"])
+
+    # Convert to numeric
+    posture_cols = [c for c in df.columns if c.startswith("posture_")]
+    for c in posture_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # Aggregate multiple sessions per day (take mean)
+    agg_dict = {c: "mean" for c in posture_cols if c in df.columns}
+    if agg_dict:
+        df = df.groupby(["subject_id", "date"]).agg(agg_dict).reset_index()
+
+    return df
+
+
 def _prepare_daily_emg_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
     """Extract daily EMG p90/p50 (right side) from EMG_daily_metrics."""
     from oh_parser import extract_nested
@@ -1222,6 +1247,8 @@ def _prepare_daily_emg_metrics(profiles: Dict[str, dict]) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["subject_id", "date", "emg_apdf_active_p90", "emg_apdf_active_p50"])
 
+    # NOTE: Use right side only (participants used right hand for mouse use).
+    # This avoids mixing side-specific hardware failures and standardizes EMG behavior.
     df = df[(df["level"] == "EMG_daily_metrics") & (df["side"] == "right")].copy()
     df = df.drop(columns=["level", "side"])
 
@@ -1253,6 +1280,7 @@ def prepare_daily_metrics(
         _prepare_daily_hr_metrics(profiles),
         _prepare_daily_noise_metrics(profiles),
         _prepare_daily_emg_metrics(profiles),
+        _prepare_daily_posture_metrics(profiles),
     ]
 
     # Merge all daily frames on subject_id + date
@@ -1322,7 +1350,7 @@ def prepare_single_instance_metrics(
         paths={
             "ipaq_level": "single_instance_questionnaires.personal.IPAQ.ipaq",
             "ipaq_total_met": "single_instance_questionnaires.personal.IPAQ.total_met",
-            "ospaq_sitting_pct": "single_instance_questionnaires.personal.OSPAQ.percentagem_sentado",
+            "ospaq_sitting_pct": "single_instance_questionnaires.personal.OSPAQ.OSPAQ_distributions.Sentado",
         },
     )
 
@@ -1351,6 +1379,27 @@ def prepare_single_instance_metrics(
         )
         weekly_har["subject_id"] = weekly_har["subject_id"].astype(str)
         df = df.merge(weekly_har, on="subject_id", how="left")
+
+        # Weekly sitting proportion from durations (sum over week)
+        if "har_sentado_duration_sec" in daily["data"].columns:
+            weekly_sit = (
+                daily["data"]
+                .groupby("subject_id")[
+                    ["har_sentado_duration_sec", "har_total_duration_sec"]
+                ]
+                .sum(min_count=1)
+                .reset_index()
+            )
+            weekly_sit["weekly_har_sitting_prop"] = (
+                weekly_sit["har_sentado_duration_sec"]
+                / weekly_sit["har_total_duration_sec"]
+            )
+            weekly_sit["subject_id"] = weekly_sit["subject_id"].astype(str)
+            df = df.merge(
+                weekly_sit[["subject_id", "weekly_har_sitting_prop"]],
+                on="subject_id",
+                how="left",
+            )
 
     # Identify numeric outcome columns
     meta_cols = {"subject_id"}

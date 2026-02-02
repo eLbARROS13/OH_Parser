@@ -16,6 +16,19 @@
 \textbf{Writing a paper?} $\rightarrow$ Part III has reporting templates
 \end{tcolorbox}
 
+### Supervisor Report + Plots (Current)
+
+The project includes a supervisor-ready report and a plot generator:
+
+```bash
+python run_hypotheses.py
+python generate_plots.py
+```
+
+Outputs:
+- Plots: `plots/hypotheses/`
+- Report: `docs/OH_SUPERVISOR_REPORT.md`
+
 \vspace{1em}
 
 ---
@@ -222,6 +235,16 @@ It does NOT tell you the effect is **large enough to matter**.
 \textbf{Always report effect sizes alongside p-values.}
 \end{tcolorbox}
 
+### Confirmatory vs. Exploratory (Our Pipeline)
+
+\begin{tcolorbox}[colback=lightgray, colframe=darkgray, title={\faIcon{flag} Confirmatory Family}, fonttitle=\bfseries]
+In the OH hypotheses pipeline, confirmatory hypotheses are H1, H2, H3, H4, and H6. H5 is explicitly exploratory.
+\end{tcolorbox}
+
+This split determines how multiple comparisons are handled:
+- Confirmatory: Holm (FWER control)
+- Exploratory: reported without multiplicity correction
+
 ---
 
 ## 5. Effect Sizes: How Big Is the Effect?
@@ -286,6 +309,14 @@ Our pipeline uses a **two-layer correction**:
 \quad \textcolor{dangerred}{\faIcon{times}} EMG\_apdf.rest.p10: p\_adj = 0.12\\[0.5em]
 \textbf{Layer 2} (within outcome): Holm on post-hoc contrasts\\
 \quad "Which specific days differ?" (only for outcomes that passed Layer 1)
+\end{tcolorbox}
+
+### Hypothesis-Level Correction (Current)
+
+For the H1–H6 hypothesis suite, we use **one p-value per hypothesis** (the LRT for the primary predictor) and apply **Holm correction** across the confirmatory set (H1, H2, H3, H4, H6). H5 is exploratory and excluded.
+
+\begin{tcolorbox}[colback=warningbg, colframe=warningyellow, title={\faIcon{exclamation-triangle} Important}, fonttitle=\bfseries]
+FDR across outcomes is used for large outcome panels (e.g., EMG outcome sweeps). It is **not** the correction used for H1–H6 hypothesis testing.
 \end{tcolorbox}
 
 ### Critical: Which P-Value Feeds FDR?
@@ -382,7 +413,7 @@ print(get_profile_summary(profiles))
 
 **Example output:**
 ```
-OH Profile Summary (42 subjects)
+OH Profile Summary (example output)
 ==================================================
 
 SENSOR DATA:
@@ -544,7 +575,9 @@ print(daily_ds["data"].head())
 - Human activities: sitting/standing/walking durations, sitting proportion, steps
 - Heart rate: duration‑weighted daily mean/std of HR ratio
 - Noise: duration‑weighted daily mean/std
-- EMG: right‑side daily p90/p50 (scaled to 0–1)
+- EMG: right‑side daily p90/p50 (stored as %MVC; not strictly bounded in [0,1])
+
+**Why right-side EMG?** The pipeline uses a consistent side to avoid left/right duplication and reduce within-day dependence. Right-side EMG is used as the standard reference for daily p90/p50 so that each subject-day contributes a single EMG summary, improving interpretability and avoiding pseudo-replication. If laterality is a research question, use `side="both"` or run side-specific models explicitly.
 
 **HR duration fallback:** If watch times are missing, per‑day durations fallback to the mean of available HR session durations.
 
@@ -657,6 +690,21 @@ result = fit_lmm(ds, outcome, transform=TransformType.LOG)
 result = fit_lmm(ds, outcome, include_side=False)
 ```
 
+### Hypotheses Package (H1–H6)
+
+The hypotheses are formalized in the `hypotheses` package. Use the runner to execute the full preregistered set:
+
+```python
+from oh_parser import load_profiles
+from hypotheses import run_all, apply_multiplicity_correction
+
+profiles = load_profiles("/path/to/OH_profiles")
+results = run_all(profiles)  # runs H1–H6
+apply_multiplicity_correction(results)  # Holm across H1/H2/H3/H4/H6
+```
+
+**Primary p-values** are LRT p-values (full vs reduced model). Wald p-values are retained as sensitivity checks.
+
 ---
 
 ## 12. Step 5: Apply Multiplicity Correction
@@ -664,12 +712,14 @@ result = fit_lmm(ds, outcome, include_side=False)
 ```python
 from oh_stats import apply_fdr
 
-# Apply FDR correction across outcomes
-fdr_results = apply_fdr(results)
+# Apply FDR correction across outcomes (example: EMG outcomes sweep)
+fdr_results = apply_fdr(emg_results)
 print(fdr_results)
 ```
 
-**Output:**
+**For hypotheses (H1–H6), use Holm across confirmatory hypotheses** rather than FDR across outcomes.
+
+**Output (illustrative):**
 ```
                            outcome    p_raw  p_adjusted  significant
 EMG_intensity.mean_percent_mvc       0.0003      0.0015         True
@@ -717,6 +767,10 @@ print(f"Number of outliers: {diag['n_outliers']}")
 print(f"Assumptions broadly met: {diag['assumptions_met']}")
 ```
 
+### Automatic Corrections (Current Pipeline)
+
+If residual normality or homoscedasticity fails and the outcome is non‑negative, the pipeline attempts a **log transform refit**. If violations persist, a **cluster bootstrap p-value** (by subject) is computed when configured.
+
 ---
 
 \newpage
@@ -727,7 +781,7 @@ print(f"Assumptions broadly met: {diag['assumptions_met']}")
 
 ## 15. Understanding the Output
 
-### Coefficients Table
+### Coefficients Table (illustrative)
 
 ```
              term   estimate  std_error   z_value   p_value  ci_lower  ci_upper
@@ -750,7 +804,7 @@ C(day_index)[T.5]    -1.643      0.975    -1.685     0.092    -3.554     0.268
 | p_value | Probability this is just random chance |
 | ci_lower/upper | 95% confidence interval |
 
-**Interpreting each row:**
+**Interpreting each row (example):**
 
 | Row | Interpretation |
 |:----|:---------------|
@@ -776,7 +830,7 @@ print(result['random_effects'])
 ICC of 0.50 tells us: Mixed models were definitely the right choice! Half of all variation is just "who the person is."
 \end{tcolorbox}
 
-### Fit Statistics
+### Fit Statistics (illustrative)
 
 ```python
 print(result['fit_stats'])
@@ -794,18 +848,22 @@ print(result['fit_stats'])
 
 ## 16. Reporting Template
 
-### Methods Section
+### Methods Section (template)
 
 \begin{tcolorbox}[colback=lightgray, colframe=darkgray, title={\faIcon{file-alt} Example Methods Text}, fonttitle=\bfseries]
 Daily EMG metrics were analyzed using linear mixed models with day as a fixed effect (categorical) and random intercepts for subjects to account for repeated measurements within individuals. Side (left/right) was included as a fixed effect. Models were fitted using maximum likelihood estimation via statsmodels (Python). Given the exploratory nature of the analysis across N=10 EMG outcomes, p-values were adjusted using the Benjamini-Hochberg procedure to control the false discovery rate at 5\%. Post-hoc pairwise comparisons between days were corrected using the Holm method. Effect sizes were calculated as Cohen's d using the residual standard deviation as the denominator.
 \end{tcolorbox}
 
-### Results Section
+### Results Section (template)
 
 \begin{tcolorbox}[colback=lightgray, colframe=darkgray, title={\faIcon{file-alt} Example Results Text}, fonttitle=\bfseries]
-We analyzed 320 observations from 37 subjects over 5 monitoring days (mean 4.3 days per subject, range 3--5). The intraclass correlation was 0.50 (95\% CI: 0.35--0.65), indicating that 50\% of the variance in EMG intensity was attributable to between-subject differences, justifying the use of mixed models.\\[0.5em]
-After FDR correction, 4 of 10 EMG outcomes showed significant day effects (all p\_adj < 0.05). For mean \%MVC specifically, the overall day effect was significant (LRT $\chi^2$(4) = 12.5, p = 0.014). Post-hoc comparisons (Holm-adjusted) revealed that Day 4 was significantly lower than Day 1 ($\Delta$ = -1.93 \%MVC, 95\% CI: -3.58 to -0.28, Cohen's d = 0.28, p\_adj = 0.043), representing a small effect.
+We analyzed N subjects and N observations over multiple monitoring days (values to be inserted from your current run). The intraclass correlation (ICC) quantifies the proportion of variance attributable to between-subject differences, justifying the use of mixed models.\\[0.5em]
+After multiple-comparison correction, only outcomes that pass the chosen threshold should be interpreted as confirmatory. Post-hoc contrasts should be run only after a significant omnibus effect.
 \end{tcolorbox}
+
+### Where the Actual Numbers Live
+
+All dataset-specific results, estimates, and p-values are reported in [docs/OH_SUPERVISOR_REPORT.md](docs/OH_SUPERVISOR_REPORT.md). This guide uses illustrative outputs unless explicitly labeled as actual results.
 
 ### What to Report (Checklist)
 
@@ -1038,6 +1096,8 @@ $\rightarrow$ Are you using FDR correction? Check for data leakage
 | **Proportions** (0-1) | LOGIT | % time, rest_percent, OSPAQ |
 | **Counts** | LOG1P | Number of events (pragmatic fallback) |
 | **Ordinal** (5+ levels) | NONE | NPRS 0-10, ROSA 1-10 (treat as continuous) |
+
+**Note:** EMG p90 (%MVC) can exceed 100% and is therefore **not** a strict proportion. Logit is inappropriate; log is the correct variance-stabilizing option when needed.
 
 ### Pre-Registered Outcomes
 

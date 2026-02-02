@@ -10,7 +10,7 @@ Architecture Note:
     to maintain consistency with the oh_parser project style.
 
 Key features:
-- LMMResult TypedDict for structured model output
+- LMMResult dict for structured model output
 - Automatic handling of categorical day_index
 - Optional variance-stabilizing transforms
 - Support for fixed effects formulas
@@ -18,7 +18,7 @@ Key features:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import warnings
 
 import numpy as np
@@ -33,37 +33,10 @@ from .registry import get_outcome_info, OutcomeType, TransformType
 
 
 # =============================================================================
-# LMMResult TypedDict
+# LMMResult (dict)
 # =============================================================================
 
-class LMMResult(TypedDict):
-    """
-    Structured result from a Linear Mixed Model fit.
-    
-    Keys:
-        outcome: Name of the outcome variable
-        model: Fitted statsmodels MixedLMResults object
-        formula: Model formula used
-        coefficients: DataFrame with estimates, SEs, CIs, p-values
-        fit_stats: Dict with AIC, BIC, log-likelihood, etc.
-        random_effects: Dict with random effects variance estimates
-        n_obs: Number of observations
-        n_groups: Number of subjects/groups
-        converged: Whether optimization converged
-        transform_applied: Transform applied to outcome (if any)
-        warnings: List of warnings generated during fitting
-    """
-    outcome: str
-    model: Optional[MixedLMResults]
-    formula: str
-    coefficients: pd.DataFrame
-    fit_stats: Dict[str, float]
-    random_effects: Dict[str, float]
-    n_obs: int
-    n_groups: int
-    converged: bool
-    transform_applied: Optional[TransformType]
-    warnings: List[str]
+LMMResult = Dict[str, Any]
 
 
 def create_lmm_result(
@@ -76,7 +49,7 @@ def create_lmm_result(
     n_obs: int = 0,
     n_groups: int = 0,
     converged: bool = False,
-    transform_applied: Optional[TransformType] = None,
+    transform_applied: Optional[str] = None,
     model_warnings: Optional[List[str]] = None,
 ) -> LMMResult:
     """
@@ -128,7 +101,7 @@ def summarize_lmm_result(result: LMMResult) -> str:
     ]
     transform = result.get("transform_applied")
     if transform and transform != TransformType.NONE:
-        lines.append(f"  Transform: {transform.name}")
+        lines.append(f"  Transform: {transform}")
     if result["warnings"]:
         lines.append(f"  Warnings: {len(result['warnings'])}")
     return "\n".join(lines)
@@ -200,7 +173,7 @@ def fit_lmm(
     outcome: str,
     fixed_effects: Optional[List[str]] = None,
     random_intercept: str = "subject_id",
-    transform: Optional[TransformType] = None,
+    transform: Optional[str] = None,
     day_as_categorical: bool = True,
     include_side: bool = True,
     formula: Optional[str] = None,
@@ -242,7 +215,7 @@ def fit_lmm(
     
     if info["outcome_type"] not in (OutcomeType.CONTINUOUS, OutcomeType.UNKNOWN):
         model_warnings.append(
-            f"Outcome type is {info['outcome_type'].name}; LMM assumes continuous. "
+            f"Outcome type is {info['outcome_type']}; LMM assumes continuous. "
             f"Consider appropriate model family."
         )
     
@@ -294,6 +267,22 @@ def fit_lmm(
             
             if include_side and "side" in df.columns and df["side"].nunique() > 1:
                 fixed_effects.append("C(side)")
+        
+        # Drop rows with missing values in predictors
+        # Extract raw column names (strip C() wrapper if present)
+        predictor_cols = []
+        for fe in fixed_effects:
+            if fe.startswith("C(") and fe.endswith(")"):
+                predictor_cols.append(fe[2:-1])
+            else:
+                predictor_cols.append(fe)
+        
+        # Filter to columns that exist in the dataframe
+        predictor_cols = [c for c in predictor_cols if c in df.columns]
+        if predictor_cols:
+            df = df.dropna(subset=predictor_cols)
+            n_obs = len(df)
+            n_groups = df[random_intercept].nunique()
         
         # Quote outcome column name if it contains special characters
         # Characters that break statsmodels formulas: . [ ] ( ) + - * / : ^ | ~ space

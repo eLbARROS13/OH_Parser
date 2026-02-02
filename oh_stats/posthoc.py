@@ -16,7 +16,7 @@ other covariates at reference/mean values.
 from __future__ import annotations
 
 from itertools import combinations
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Literal, Optional, Tuple
 import warnings
 
 import numpy as np
@@ -28,27 +28,10 @@ from .prepare import AnalysisDataset
 
 
 # =============================================================================
-# ContrastResult TypedDict
+# ContrastResult (dict)
 # =============================================================================
 
-class ContrastResult(TypedDict):
-    """
-    Result of pairwise contrast analysis.
-    
-    Keys:
-        outcome: Name of the outcome variable
-        factor: Factor being compared (e.g., "day_index")
-        contrasts: DataFrame with contrast estimates, SEs, CIs, p-values
-        emmeans: DataFrame with estimated marginal means per level
-        correction: Multiplicity correction applied
-        effect_sizes: DataFrame with effect size estimates (optional)
-    """
-    outcome: str
-    factor: str
-    contrasts: pd.DataFrame
-    emmeans: pd.DataFrame
-    correction: str
-    effect_sizes: Optional[pd.DataFrame]
+ContrastResult = Dict[str, Any]
 
 
 def create_contrast_result(

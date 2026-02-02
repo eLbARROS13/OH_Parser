@@ -11,7 +11,7 @@ Architecture Note:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple
 import warnings
 
 import numpy as np
@@ -22,29 +22,10 @@ from .lmm import LMMResult, get_residuals, get_fitted_values
 
 
 # =============================================================================
-# DiagnosticsResult TypedDict
+# DiagnosticsResult (dict)
 # =============================================================================
 
-class DiagnosticsResult(TypedDict):
-    """
-    Result of model diagnostics.
-    
-    Keys:
-        outcome: Outcome variable name
-        residuals_normality: Shapiro-Wilk test results
-        homoscedasticity: Levene/Breusch-Pagan test results
-        outliers: Information about potential outliers
-        influential: Information about influential observations
-        overall_assessment: Summary assessment
-        warnings: List of diagnostic warnings
-    """
-    outcome: str
-    residuals_normality: Dict[str, Any]
-    homoscedasticity: Dict[str, Any]
-    outliers: Dict[str, Any]
-    influential: Dict[str, Any]
-    overall_assessment: str
-    warnings: List[str]
+DiagnosticsResult = Dict[str, Any]
 
 
 def create_diagnostics_result(

@@ -10,6 +10,7 @@
 \usetikzlibrary{shapes.geometric,arrows,positioning}
 \usepackage{tcolorbox}
 \tcbuselibrary{skins,breakable}
+\usepackage{pdflscape}
 \usepackage{enumitem}
 \usepackage{booktabs}
 \usepackage{colortbl}
@@ -53,24 +54,28 @@
 % ============================================================
 % CODE BLOCK STYLING
 % ============================================================
-\renewenvironment{Shaded}{
-  \begin{mdframed}[
-    backgroundcolor=codebg,
-    linecolor=codeframe,
-    linewidth=1pt,
-    topline=true,
-    bottomline=true,
-    leftline=true,
-    rightline=true,
-    innerleftmargin=10pt,
-    innerrightmargin=10pt,
-    innertopmargin=8pt,
-    innerbottommargin=8pt,
-    skipabove=10pt,
-    skipbelow=10pt,
-    roundcorner=3pt
-  ]
-}{\end{mdframed}}
+\makeatletter
+\@ifundefined{Shaded}{
+  \newenvironment{Shaded}{
+    \begin{mdframed}[
+      backgroundcolor=codebg,
+      linecolor=codeframe,
+      linewidth=1pt,
+      topline=true,
+      bottomline=true,
+      leftline=true,
+      rightline=true,
+      innerleftmargin=10pt,
+      innerrightmargin=10pt,
+      innertopmargin=8pt,
+      innerbottommargin=8pt,
+      skipabove=10pt,
+      skipbelow=10pt,
+      roundcorner=3pt
+    ]
+  }{\end{mdframed}}
+}{}
+\makeatother
 
 % Reduce code font size
 \AtBeginEnvironment{Highlighting}{\small}

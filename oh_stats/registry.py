@@ -25,8 +25,8 @@ Usage:
 """
 from __future__ import annotations
 
-from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, Literal
+from types import SimpleNamespace
 import warnings
 
 
@@ -34,71 +34,70 @@ import warnings
 # Enums (Type constants - these are acceptable)
 # =============================================================================
 
-class OutcomeType(Enum):
-    """Statistical model family for an outcome."""
-    CONTINUOUS = auto()      # LMM (Gaussian), with optional transform
-    ORDINAL = auto()         # Ordered logistic mixed model
-    PROPORTION = auto()      # Beta / logit-transform LMM for [0,1]
-    COUNT = auto()           # Poisson / NegBin for event counts
-    BINARY = auto()          # Logistic mixed model for 0/1
-    UNKNOWN = auto()         # Not yet classified
+OutcomeTypeValue = Literal[
+    "continuous",
+    "ordinal",
+    "proportion",
+    "count",
+    "binary",
+    "unknown",
+]
 
+AnalysisLevelValue = Literal[
+    "session",
+    "daily",
+    "weekly",
+    "single",
+]
 
-class AnalysisLevel(Enum):
-    """Temporal aggregation level of the outcome."""
-    SESSION = auto()         # Per-session metrics
-    DAILY = auto()           # Daily aggregates
-    WEEKLY = auto()          # Weekly aggregates
-    SINGLE = auto()          # One-time measures (e.g., baseline questionnaire)
+TransformTypeValue = Literal[
+    "none",
+    "log",
+    "log1p",
+    "sqrt",
+    "logit",
+    "arcsine",
+]
 
+# Namespace-style constants (no class definitions)
+OutcomeType = SimpleNamespace(
+    CONTINUOUS="continuous",
+    ORDINAL="ordinal",
+    PROPORTION="proportion",
+    COUNT="count",
+    BINARY="binary",
+    UNKNOWN="unknown",
+)
 
-class TransformType(Enum):
-    """Recommended variance-stabilizing transforms."""
-    NONE = auto()
-    LOG = auto()             # log(x) for positive skewed
-    LOG1P = auto()           # log(1 + x) for non-negative with zeros
-    SQRT = auto()            # sqrt(x) for moderate skew
-    LOGIT = auto()           # logit(x) for proportions
-    ARCSINE = auto()         # arcsin(sqrt(x)) for proportions (deprecated)
+AnalysisLevel = SimpleNamespace(
+    SESSION="session",
+    DAILY="daily",
+    WEEKLY="weekly",
+    SINGLE="single",
+)
+
+TransformType = SimpleNamespace(
+    NONE="none",
+    LOG="log",
+    LOG1P="log1p",
+    SQRT="sqrt",
+    LOGIT="logit",
+    ARCSINE="arcsine",
+)
 
 
 # =============================================================================
-# OutcomeInfo TypedDict
+# OutcomeInfo (dict)
 # =============================================================================
 
-class OutcomeInfo(TypedDict):
-    """
-    Metadata for a single outcome variable.
-    
-    Keys:
-        name: Outcome variable name (dot-notation path)
-        outcome_type: Statistical model family
-        level: Temporal aggregation level
-        transform: Recommended transform (can be overridden)
-        description: Human-readable description
-        unit: Measurement unit (e.g., "%MVC", "seconds", "count")
-        valid_range: (min, max) tuple for sanity checks
-        is_primary: Whether this is a primary (vs exploratory) outcome
-        sensor: Source sensor (e.g., "emg", "heart_rate", "questionnaire")
-        requires_both_sides: Whether left/right must both exist
-    """
-    name: str
-    outcome_type: OutcomeType
-    level: AnalysisLevel
-    transform: TransformType
-    description: str
-    unit: str
-    valid_range: Optional[Tuple[Optional[float], Optional[float]]]
-    is_primary: bool
-    sensor: str
-    requires_both_sides: bool
+OutcomeInfo = Dict[str, Any]
 
 
 def create_outcome_info(
     name: str,
-    outcome_type: OutcomeType = OutcomeType.CONTINUOUS,
-    level: AnalysisLevel = AnalysisLevel.DAILY,
-    transform: TransformType = TransformType.NONE,
+    outcome_type: OutcomeTypeValue = "continuous",
+    level: AnalysisLevelValue = "daily",
+    transform: TransformTypeValue = "none",
     description: str = "",
     unit: str = "",
     valid_range: Optional[Tuple[Optional[float], Optional[float]]] = None,
@@ -615,10 +614,181 @@ _DEFAULT_QUESTIONNAIRE_OUTCOMES: Dict[str, OutcomeInfo] = {
 }
 
 
+# =============================================================================
+# PROJECT-SPECIFIC (underscore) OUTCOMES
+# =============================================================================
+
+_PROJECT_OUTCOMES: Dict[str, OutcomeInfo] = {
+    # EMG APDF (underscore naming from prepare.py)
+    "emg_apdf_active_p90": create_outcome_info(
+        name="emg_apdf_active_p90",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="90th percentile of activation during active periods",
+        unit="fraction of %MVC (0-1)",
+        valid_range=(0, 1),
+        is_primary=True,
+        sensor="emg",
+    ),
+    "emg_apdf_active_p90_log": create_outcome_info(
+        name="emg_apdf_active_p90_log",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.LOG,
+        description="Log-transformed EMG p90 (fraction of %MVC)",
+        unit="log(fraction of %MVC)",
+        valid_range=(None, None),
+        is_primary=False,
+        sensor="emg",
+    ),
+    "emg_apdf_active_p50": create_outcome_info(
+        name="emg_apdf_active_p50",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Median activation during active periods",
+        unit="fraction of %MVC (0-1)",
+        valid_range=(0, 1),
+        is_primary=False,
+        sensor="emg",
+    ),
+    # Daily questionnaire/workload
+    "workload_mean": create_outcome_info(
+        name="workload_mean",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Daily perceived workload (mean score)",
+        unit="score",
+        valid_range=(None, None),
+        is_primary=False,
+        sensor="questionnaire",
+    ),
+    # HAR sitting proportion (daily)
+    "har_sentado_prop": create_outcome_info(
+        name="har_sentado_prop",
+        outcome_type=OutcomeType.PROPORTION,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.LOGIT,
+        description="Daily sitting proportion from HAR",
+        unit="proportion 0-1",
+        valid_range=(0, 1),
+        is_primary=False,
+        sensor="har",
+    ),
+    "har_sentado_prop_logit": create_outcome_info(
+        name="har_sentado_prop_logit",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.LOGIT,
+        description="Logit-transformed sitting proportion",
+        unit="log-odds",
+        valid_range=(None, None),
+        is_primary=False,
+        sensor="har",
+    ),
+    # HAR durations (daily)
+    "har_total_duration_sec": create_outcome_info(
+        name="har_total_duration_sec",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.LOG1P,
+        description="Total monitored duration (seconds)",
+        unit="seconds",
+        valid_range=(0, None),
+        is_primary=False,
+        sensor="har",
+    ),
+    "har_sentado_duration_sec": create_outcome_info(
+        name="har_sentado_duration_sec",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.LOG1P,
+        description="Sitting duration (seconds)",
+        unit="seconds",
+        valid_range=(0, None),
+        is_primary=False,
+        sensor="har",
+    ),
+    # Heart rate
+    "hr_ratio_mean": create_outcome_info(
+        name="hr_ratio_mean",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Daily mean HR ratio",
+        unit="ratio",
+        valid_range=(0, None),
+        is_primary=False,
+        sensor="heart_rate",
+    ),
+    "hr_ratio_std": create_outcome_info(
+        name="hr_ratio_std",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Daily SD HR ratio",
+        unit="ratio",
+        valid_range=(0, None),
+        is_primary=False,
+        sensor="heart_rate",
+    ),
+    # Noise
+    "noise_mean": create_outcome_info(
+        name="noise_mean",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Daily mean noise level",
+        unit="dB",
+        valid_range=(None, None),
+        is_primary=False,
+        sensor="noise",
+    ),
+    "noise_std": create_outcome_info(
+        name="noise_std",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Daily SD noise level",
+        unit="dB",
+        valid_range=(0, None),
+        is_primary=False,
+        sensor="noise",
+    ),
+    # Posture
+    "posture_95_confidence_ellipse_area": create_outcome_info(
+        name="posture_95_confidence_ellipse_area",
+        outcome_type=OutcomeType.CONTINUOUS,
+        level=AnalysisLevel.DAILY,
+        transform=TransformType.NONE,
+        description="Posture sway area (95% confidence ellipse)",
+        unit="cm^2",
+        valid_range=(0, None),
+        is_primary=False,
+        sensor="posture",
+    ),
+    # OSPAQ sitting (subject-level)
+    "ospaq_sitting_frac": create_outcome_info(
+        name="ospaq_sitting_frac",
+        outcome_type=OutcomeType.PROPORTION,
+        level=AnalysisLevel.SINGLE,
+        transform=TransformType.LOGIT,
+        description="OSPAQ self-reported sitting proportion",
+        unit="proportion 0-1",
+        valid_range=(0, 1),
+        is_primary=False,
+        sensor="questionnaire",
+    ),
+}
+
+
 # Global mutable registry (populated from defaults)
 OUTCOME_REGISTRY: Dict[str, OutcomeInfo] = {
     **_DEFAULT_EMG_OUTCOMES,
     **_DEFAULT_QUESTIONNAIRE_OUTCOMES,
+    **_PROJECT_OUTCOMES,
 }
 
 
@@ -778,3 +948,4 @@ def reset_registry() -> None:
     OUTCOME_REGISTRY.clear()
     OUTCOME_REGISTRY.update(_DEFAULT_EMG_OUTCOMES)
     OUTCOME_REGISTRY.update(_DEFAULT_QUESTIONNAIRE_OUTCOMES)
+    OUTCOME_REGISTRY.update(_PROJECT_OUTCOMES)

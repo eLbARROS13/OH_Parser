@@ -80,6 +80,13 @@ from oh_stats import (
     export_to_latex,
     print_results_summary,
     print_coefficient_summary,
+    # Plotting / Visualization
+    plot_lmm_trajectories,
+    plot_lmm_fit,
+    plot_random_intercepts,
+    plot_model_diagnostics,
+    plot_group_comparison,
+    create_lmm_summary_figure,
 )
 
 from oh_stats.registry import (
@@ -110,7 +117,7 @@ def main() -> None:
     print_section("[1] LOADING OH PROFILES")
 
     # Path can be overridden by environment variable
-    oh_profiles_path = os.getenv("OH_PROFILES_PATH", r"E:\Backup PrevOccupAI_PLUS Data\OH_profiles_2")
+    oh_profiles_path = os.getenv("OH_PROFILES_PATH", "/Users/goncalobarros/Documents/projects/OH_profiles")
 
     print(f"Using OH profile path: {oh_profiles_path}")
     profiles = load_profiles(oh_profiles_path)
@@ -383,9 +390,13 @@ def main() -> None:
     info = get_outcome_info("EMG_apdf.active.p50")
     print("\n--- Outcome Info: EMG_apdf.active.p50 ---")
     if info:
-        print(f"  Type: {info['outcome_type'].name}")
-        print(f"  Level: {info['level']}")
-        print(f"  Transform: {info['transform'].name}")
+        outcome_type = info.get("outcome_type")
+        transform = info.get("transform")
+        outcome_type_label = outcome_type.name if hasattr(outcome_type, "name") else str(outcome_type)
+        transform_label = transform.name if hasattr(transform, "name") else str(transform)
+        print(f"  Type: {outcome_type_label}")
+        print(f"  Level: {info.get('level')}")
+        print(f"  Transform: {transform_label}")
         print(f"  Is Primary: {info.get('is_primary', False)}")
         print(f"  Description: {info.get('description', 'N/A')}")
     else:
@@ -399,170 +410,138 @@ def main() -> None:
     # ---------------------------------------------------------------------
     print_section("[11] HYPOTHESIS TESTING (H1–H6)")
 
-    hypothesis_results = {}
+    from hypotheses.runner import run_all as run_hypotheses
+    from hypotheses.runner import apply_multiplicity_correction
+    from hypotheses.runner import summarize_results
 
-    # H1: FO vs BO differ in daily EMG p90 (right side only)
-    if "emg_apdf_active_p90" in daily_ds["data"].columns and "work_type" in daily_ds["data"].columns:
-        print("\n[H1] FO vs BO on EMG p90 (daily)")
-        h1_result = fit_lmm(
-            daily_ds,
-            outcome="emg_apdf_active_p90",
-            fixed_effects=["work_type", "C(day_index)"],
-            random_intercept="subject_id",
-        )
-        h1_p = h1_result["coefficients"].loc[
-            h1_result["coefficients"]["term"].str.contains("work_type", case=False, na=False),
-            "p_value",
-        ]
-        h1_p = float(h1_p.iloc[0]) if not h1_p.empty else np.nan
-        hypothesis_results["H1"] = {"p_value": h1_p, "note": "FO vs BO on EMG p90"}
-        print(summarize_lmm_result(h1_result))
-    else:
-        print("\n[H1] Skipped (missing emg_apdf_active_p90 or work_type)")
+    hypothesis_results = run_hypotheses(profiles, verbose=True)
+    if hypothesis_results:
+        corrected = apply_multiplicity_correction(hypothesis_results, method="holm", verbose=True)
+        summary = summarize_results(hypothesis_results)
+        print("\n--- Hypothesis Summary ---")
+        print(summary.to_string(index=False))
 
-    # H2: FO vs BO differ in daily workload (stress proxy)
-    if "workload_mean" in daily_ds["data"].columns and "work_type" in daily_ds["data"].columns:
-        print("\n[H2] FO vs BO on daily workload mean")
-        if daily_ds["data"]["workload_mean"].dropna().empty:
-            print("[H2] Skipped (workload_mean has no non-missing values)")
-        else:
-            h2_result = fit_lmm(
+    # =========================================================================
+    # STEP 11: LMM VISUALIZATION (NEW)
+    # =========================================================================
+    # This section demonstrates the new plotting module for understanding
+    # LMM results visually.
+    print_section("STEP 11: LMM Visualization")
+    
+    # We'll use the first successful EMG model from STEP 5 for visualization
+    # Let's refit one model specifically for plotting
+    print("\nGenerating LMM visualizations...")
+    
+    # Find a suitable EMG outcome (check both uppercase and lowercase patterns)
+    emg_outcomes = [c for c in daily_ds["data"].columns if c.lower().startswith("emg")]
+    if emg_outcomes:
+        viz_outcome = emg_outcomes[0]
+        print(f"\n[11.1] Fitting model for visualization: {viz_outcome}")
+        
+        # Fit with work_type as fixed effect (if available)
+        if "work_type" in daily_ds["data"].columns:
+            viz_result = fit_lmm(
                 daily_ds,
-                outcome="workload_mean",
-                fixed_effects=["work_type", "C(day_index)"],
+                outcome=viz_outcome,
+                fixed_effects=["C(work_type)", "C(day_index)"],
                 random_intercept="subject_id",
             )
-            if h2_result["coefficients"].empty:
-                print("[H2] Skipped (model produced no coefficients)")
-            else:
-                h2_p = h2_result["coefficients"].loc[
-                    h2_result["coefficients"]["term"].str.contains("work_type", case=False, na=False),
-                    "p_value",
-                ]
-                h2_p = float(h2_p.iloc[0]) if not h2_p.empty else np.nan
-                hypothesis_results["H2"] = {"p_value": h2_p, "note": "FO vs BO on workload mean"}
-                print(summarize_lmm_result(h2_result))
-    else:
-        print("\n[H2] Skipped (missing workload_mean or work_type)")
-
-    # H3: Daily stress predicts daily sitting proportion
-    if "workload_mean" in daily_ds["data"].columns and "har_sentado_prop" in daily_ds["data"].columns:
-        print("\n[H3] Daily workload predicts daily sitting proportion")
-        df_h3 = daily_ds["data"].copy()
-        if df_h3["workload_mean"].dropna().empty:
-            print("[H3] Skipped (workload_mean has no non-missing values)")
         else:
-            eps = 1e-6
-            df_h3["har_sit_logit"] = np.log(
-                df_h3["har_sentado_prop"].clip(eps, 1 - eps) /
-                (1 - df_h3["har_sentado_prop"].clip(eps, 1 - eps))
+            viz_result = fit_lmm(
+                daily_ds,
+                outcome=viz_outcome,
+                fixed_effects=["C(day_index)"],
+                random_intercept="subject_id",
             )
-            h3_ds = prepare_from_dataframe(
-                df=df_h3[["subject_id", "date", "har_sit_logit", "workload_mean", "day_index"]].dropna(),
-                sensor="har",
-                level="daily",
-                id_col="subject_id",
-                date_col="date",
-                outcome_cols=["har_sit_logit"],
-            )
-            if h3_ds["data"].empty:
-                print("[H3] Skipped (no valid rows after logit + dropna)")
-            else:
-                h3_result = fit_lmm(
-                    h3_ds,
-                    outcome="har_sit_logit",
-                    fixed_effects=["workload_mean", "C(day_index)"],
-                    random_intercept="subject_id",
+        
+        if viz_result.get("model") is not None:
+            print(summarize_lmm_result(viz_result))
+            
+            # Create output directory for figures
+            output_dir = os.path.join(os.path.dirname(oh_profiles_path), "figures")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # [11.2] Spaghetti Plot - Raw trajectories with population means
+            print("\n[11.2] Generating spaghetti plot (raw trajectories)...")
+            try:
+                fig_traj = plot_lmm_trajectories(
+                    df=daily_ds["data"],
+                    outcome=viz_outcome,
+                    group="work_type" if "work_type" in daily_ds["data"].columns else None,
+                    subject="subject_id",
+                    day="day_index",
+                    save_path=os.path.join(output_dir, "lmm_trajectories.png"),
                 )
-                if h3_result["coefficients"].empty:
-                    print("[H3] Skipped (model produced no coefficients)")
+                print(f"   Saved: {output_dir}/lmm_trajectories.png")
+            except Exception as e:
+                print(f"   Skipped spaghetti plot: {e}")
+            
+            # [11.3] LMM Fit Plot - Actual model predictions
+            print("\n[11.3] Generating LMM fit plot (model predictions)...")
+            try:
+                fig_fit = plot_lmm_fit(
+                    ds=daily_ds,
+                    result=viz_result,
+                    group="work_type" if "work_type" in daily_ds["data"].columns else None,
+                    day="day_index",
+                    save_path=os.path.join(output_dir, "lmm_fit.png"),
+                )
+                print(f"   Saved: {output_dir}/lmm_fit.png")
+            except Exception as e:
+                print(f"   Skipped LMM fit plot: {e}")
+            
+            # [11.4] Random Intercepts - "Who you are matters"
+            print("\n[11.4] Generating random intercepts plot...")
+            try:
+                # Build group mapping for coloring
+                if "work_type" in daily_ds["data"].columns:
+                    group_map = (
+                        daily_ds["data"]
+                        .groupby("subject_id")["work_type"]
+                        .first()
+                        .to_dict()
+                    )
                 else:
-                    h3_p = h3_result["coefficients"].loc[
-                        h3_result["coefficients"]["term"].str.contains("workload_mean", case=False, na=False),
-                        "p_value",
-                    ]
-                    h3_p = float(h3_p.iloc[0]) if not h3_p.empty else np.nan
-                    hypothesis_results["H3"] = {"p_value": h3_p, "note": "workload -> sitting proportion"}
-                    print(summarize_lmm_result(h3_result))
-    else:
-        print("\n[H3] Skipped (missing workload_mean or har_sentado_prop)")
-
-    # H4: OSPAQ sitting predicts objective sitting (subject-level)
-    if "ospaq_sitting_frac" in single_ds["data"].columns and "har_sentado_prop" in daily_ds["data"].columns:
-        print("\n[H4] OSPAQ sitting vs objective sitting (subject-level)")
-        obj = daily_ds["data"].copy()
-        obj = obj.dropna(subset=["har_sentado_prop"])
-        obj_subject = obj.groupby("subject_id")["har_sentado_prop"].mean().reset_index()
-        df_h4 = single_ds["data"][["subject_id", "ospaq_sitting_frac", "work_type"]].merge(
-            obj_subject,
-            on="subject_id",
-            how="inner",
-        )
-        df_h4 = df_h4.dropna(subset=["ospaq_sitting_frac", "har_sentado_prop"])
-        if not df_h4.empty:
-            X = df_h4[["ospaq_sitting_frac"]]
-            if "work_type" in df_h4.columns:
-                X = pd.concat([X, pd.get_dummies(df_h4["work_type"], drop_first=True)], axis=1)
-            X = sm.add_constant(X, has_constant="add")
-            y = df_h4["har_sentado_prop"]
-            model = sm.OLS(y, X).fit()
-            h4_p = model.pvalues.get("ospaq_sitting_frac", np.nan)
-            hypothesis_results["H4"] = {"p_value": float(h4_p), "note": "OSPAQ -> objective sitting"}
-            print(model.summary().as_text().splitlines()[0])
+                    group_map = None
+                
+                fig_re = plot_random_intercepts(
+                    result=viz_result,
+                    group_labels=group_map,
+                    save_path=os.path.join(output_dir, "lmm_random_intercepts.png"),
+                )
+                print(f"   Saved: {output_dir}/lmm_random_intercepts.png")
+            except Exception as e:
+                print(f"   Skipped random intercepts plot: {e}")
+            
+            # [11.5] Model Diagnostics - QQ + Residuals vs Fitted
+            print("\n[11.5] Generating diagnostic plots...")
+            try:
+                fig_diag = plot_model_diagnostics(
+                    result=viz_result,
+                    save_path=os.path.join(output_dir, "lmm_diagnostics.png"),
+                )
+                print(f"   Saved: {output_dir}/lmm_diagnostics.png")
+            except Exception as e:
+                print(f"   Skipped diagnostic plots: {e}")
+            
+            # [11.6] Comprehensive 4-panel summary
+            print("\n[11.6] Generating comprehensive summary figure...")
+            try:
+                fig_summary = create_lmm_summary_figure(
+                    ds=daily_ds,
+                    result=viz_result,
+                    group="work_type" if "work_type" in daily_ds["data"].columns else None,
+                    save_path=os.path.join(output_dir, "lmm_summary.png"),
+                )
+                print(f"   Saved: {output_dir}/lmm_summary.png")
+            except Exception as e:
+                print(f"   Skipped summary figure: {e}")
+            
+            print(f"\n✓ All figures saved to: {output_dir}/")
         else:
-            print("[H4] Skipped (no overlap between OSPAQ and objective sitting)")
+            print("   Model fitting failed - skipping visualizations")
     else:
-        print("\n[H4] Skipped (missing OSPAQ or objective sitting data)")
-
-    # H5: Daily physiological predictors of EMG p90 (exploratory)
-    predictors = [c for c in ["hr_ratio_mean", "noise_mean"] if c in daily_ds["data"].columns]
-    if "emg_apdf_active_p90" in daily_ds["data"].columns and predictors:
-        print("\n[H5] Physiological predictors of EMG p90 (exploratory)")
-        h5_fixed = predictors + ["C(day_index)"]
-        h5_result = fit_lmm(
-            daily_ds,
-            outcome="emg_apdf_active_p90",
-            fixed_effects=h5_fixed,
-            random_intercept="subject_id",
-        )
-        coeffs = h5_result.get("coefficients")
-        if isinstance(coeffs, pd.DataFrame) and "term" in coeffs.columns:
-            h5_p = coeffs.loc[
-                coeffs["term"].str.contains(predictors[0], case=False, na=False),
-                "p_value",
-            ]
-            h5_p = float(h5_p.iloc[0]) if not h5_p.empty else np.nan
-            hypothesis_results["H5"] = {"p_value": h5_p, "note": "Physiological predictors"}
-        else:
-            hypothesis_results["H5"] = {"p_value": np.nan, "note": "No coefficients returned"}
-        print(summarize_lmm_result(h5_result))
-    else:
-        print("\n[H5] Skipped (missing EMG p90 or predictors)")
-
-    # H6: FO vs BO differ in posture metric (if available)
-    posture_cols = [c for c in daily_ds["data"].columns if c.startswith("posture_")]
-    if posture_cols and "work_type" in daily_ds["data"].columns:
-        posture_outcome = posture_cols[0]
-        print(f"\n[H6] FO vs BO on posture metric: {posture_outcome}")
-        h6_result = fit_lmm(
-            daily_ds,
-            outcome=posture_outcome,
-            fixed_effects=["work_type", "C(day_index)"],
-            random_intercept="subject_id",
-        )
-        h6_p = h6_result["coefficients"].loc[
-            h6_result["coefficients"]["term"].str.contains("work_type", case=False, na=False),
-            "p_value",
-        ]
-        h6_p = float(h6_p.iloc[0]) if not h6_p.empty else np.nan
-        hypothesis_results["H6"] = {"p_value": h6_p, "note": "FO vs BO on posture"}
-        print(summarize_lmm_result(h6_result))
-    else:
-        print("\n[H6] Skipped (no posture metric available)")
-
-    if hypothesis_results:
-        print("\n--- Holm correction across hypotheses ---")
-        print(apply_holm_hypotheses(hypothesis_results))
+        print("   No EMG outcomes available for visualization")
 
 
 if __name__ == "__main__":

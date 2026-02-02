@@ -8,6 +8,7 @@ venv/
 env/
 .venv/
 *_venv/
+oh_venv/
 .env
 
 # IDE
@@ -20,6 +21,16 @@ env/
 dist/
 build/
 *.egg-info/
+
+# LaTeX
+*.aux
+*.log
+*.out
+
+# Testing / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Jupyter
 .ipynb_checkpoints/

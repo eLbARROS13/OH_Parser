@@ -1,0 +1,840 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{pdflscape}
+\usepackage{tcolorbox}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\definecolor{infoblue}{HTML}{1F6FEB}
+\definecolor{infobg}{HTML}{EAF2FF}
+\definecolor{tipgreen}{HTML}{2DA44E}
+\definecolor{tipbg}{HTML}{E9F8EF}
+\definecolor{warningyellow}{HTML}{D29922}
+\definecolor{warningbg}{HTML}{FFF4E5}
+\definecolor{lightgray}{HTML}{F6F8FA}
+\definecolor{darkgray}{HTML}{57606A}
+
+\graphicspath{{plots/hypotheses/}}
+
+\begin{document}
+
+\begin{center}
+\Large\textbf{Occupational Health Toolkit – Statistical Report for Supervisor}\\[0.4em]
+\normalsize February 1, 2026
+\end{center}
+
+\begin{tcolorbox}[colback=infobg, colframe=infoblue, title={Purpose}, fonttitle=\bfseries]
+This report documents the statistical workflow, model choices, transformations, assumption checks, multiple-comparison corrections, and results for hypotheses H1–H6. It is a rigorous methods + results + interpretation briefing (not a paper) intended to justify why each model and adjustment was chosen and to summarize outputs with diagnostics.
+\end{tcolorbox}
+
+\section*{Study Design and Data Structure}
+
+\begin{tcolorbox}[colback=tipbg, colframe=tipgreen, title={Dataset Summary}, fonttitle=\bfseries]
+\begin{itemize}
+\item Population: 38 office workers (Front-Office vs Back-Office)
+\item Repeated measures: daily observations per subject (\texttt{subject\_id})
+\item Key outcomes: EMG trapezius activity, perceived workload, sitting behavior, postural sway, and self-report sitting (OSPAQ)
+\item Modeling strategy: Linear Mixed Models (LMMs) for repeated measures; OLS for subject-level validation (H4)
+\item Repeated-measures implication: within-subject correlation requires random effects to avoid inflated type-I error
+\end{itemize}
+\end{tcolorbox}
+
+\section*{Hypotheses and Models (Confirmatory vs Exploratory)}
+
+All confirmatory models use ML estimation for valid likelihood ratio tests (LRT). Day effects are categorical (\texttt{C(day\_index)}), avoiding linear-trend assumptions.
+
+\clearpage
+\begin{landscape}
+\footnotesize
+\setlength{\LTpre}{0pt}
+\setlength{\LTpost}{0pt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\begin{longtable}{p{3.0cm}p{2.8cm}p{1.4cm}p{8.0cm}p{4.5cm}}
+\textbf{Hypothesis} & \textbf{Outcome} & \textbf{Model} & \textbf{Formula (fixed effects)} & \textbf{Notes} \\
+\hline
+H1 (Confirmatory) & EMG p90 (\%MVC) & LMM & log(EMG p90) ~ \texttt{work\_type} + \texttt{C(day\_index)} & Log transform for skew/heteroscedasticity; EMG p90 not bounded in [0,1] \\
+H2 (Confirmatory) & Workload mean & LMM & \texttt{workload\_mean} ~ \texttt{work\_type} + \texttt{C(day\_index)} & No transform \\
+H3 (Confirmatory) & Sitting proportion & LMM & logit(\texttt{har\_sentado\_prop}) ~ \texttt{workload\_mean} + \texttt{work\_type} + \texttt{C(day\_index)} & Proportion -> logit \\
+H4 (Confirmatory) & OSPAQ validation & OLS & logit(\texttt{har\_sentado\_prop}) ~ \texttt{ospaq\_sitting\_frac} + \texttt{work\_type} & Subject-level aggregation \\
+H5 (Exploratory) & EMG p90 (\%MVC) & LMM & EMG p90 ~ \texttt{hr\_ratio\_mean\_within} + \texttt{hr\_ratio\_mean\_between} + \texttt{noise\_mean\_within} + \texttt{noise\_mean\_between} + \texttt{posture\_95\_confidence\_ellipse\_area\_within} + \texttt{posture\_95\_confidence\_ellipse\_area\_between} + \texttt{work\_type} + \texttt{C(day\_index)} & Within-between decomposition \\
+H6 (Confirmatory) & Posture area ($cm^2$) & LMM & \texttt{posture\_95\_confidence\_ellipse\_area} ~ \texttt{work\_type} + \texttt{C(day\_index)} & No transform \\
+\end{longtable}
+\end{landscape}
+
+\section*{Transformations and Units}
+
+\begin{tcolorbox}[colback=lightgray, colframe=darkgray, title={Transform Summary}, fonttitle=\bfseries]
+\begin{itemize}
+\item EMG p90: \%MVC; can exceed 100\% -> not a strict proportion; log transform used in H1
+\item Workload mean: questionnaire score; no transform
+\item Sitting proportion: proportion in (0,1); logit transform used in H3 and H4
+\item OSPAQ sitting: proportion in (0,1); predictor, no transform
+\item Posture ellipse area: $cm^2$; no transform
+\item HAR durations: seconds; used for duration-weighted sitting proportion in H4
+\end{itemize}
+\end{tcolorbox}
+
+\section*{Assumption Checks and Corrections}
+
+\begin{tcolorbox}[colback=warningbg, colframe=warningyellow, title={Diagnostics}, fonttitle=\bfseries]
+\begin{itemize}
+\item Normality: Q–Q plot + Shapiro-Wilk/Jarque-Bera summary
+\item Homoscedasticity: residuals vs fitted + Breusch–Pagan proxy
+\item Outliers: standardized residuals > 3 flagged
+\item Auto-correction: if violations and outcome $\ge$ 0, apply log transform and refit
+\item Bootstrap: cluster bootstrap p-values if violations persist and configured
+\end{itemize}
+\end{tcolorbox}
+
+Note: H5 produced convergence warnings (boundary of parameter space), retained to avoid masking instability in the exploratory model.
+
+\section*{Multiple Comparisons}
+
+Confirmatory family: H1, H2, H3, H4, H6
+
+\begin{tcolorbox}[colback=infobg, colframe=infoblue, title={Correction Strategy}, fonttitle=\bfseries]
+Holm step-down procedure (FWER control) applied to the confirmatory family. H5 is exploratory and excluded from correction. Primary p-values are LRT (full vs reduced model); Wald p-values retained for sensitivity.
+\end{tcolorbox}
+
+\section*{Results: Estimates + Interpretation}
+
+\clearpage
+\begin{landscape}
+\footnotesize
+\setlength{\LTpre}{0pt}
+\setlength{\LTpost}{0pt}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.2}
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+\begin{longtable}{p{2.0cm}p{1.9cm}p{2.4cm}p{4.2cm}p{1.1cm}p{1.1cm}p{1.1cm}p{7.0cm}}
+\textbf{Hypothesis} & \textbf{N\_obs / N\_subjects} & \textbf{Primary term} & \textbf{Estimate (95\% CI)} & \textbf{Wald p} & \textbf{LRT p} & \textbf{Holm p} & \textbf{Interpretation} \\
+\hline
+H1 & 161 / 38 & \texttt{work\_type} & 0.5027 [0.1335, 0.8719] & 0.0076 & 0.0107 & 0.0537 & FO higher than BO on log scale; narrowly misses Holm threshold \\
+H2 & 176 / 38 & \texttt{work\_type} & -0.0176 [-0.3930, 0.3578] & 0.9268 & 0.9268 & 1.0000 & No evidence of FO/BO workload difference \\
+H3 & 168 / 38 & \texttt{workload\_mean} & -0.0505 [-0.1416, 0.0405] & 0.2768 & 0.0431 & 0.1294 & LRT suggests model-level improvement but coefficient not significant; tentative evidence \\
+H4 & 38 / 38 & \texttt{ospaq\_sitting\_frac} & 0.1709 [-0.4316, 0.7734] & 0.5684 & --- & 1.0000 & No evidence of strong self-report vs objective association \\
+H5 (Expl.) & 160 / 38 & \texttt{posture\_within} & 0.0041 [-0.0834, 0.0916] & 0.9266 & 0.9266 & --- & No within-day posture–EMG association; exploratory with convergence warnings \\
+H6 & 180 / 38 & \texttt{work\_type} & -0.1482 [-0.2660, -0.0305] & 0.0136 & 0.0174 & 0.0698 & Suggestive FO/BO difference; not confirmatory under Holm \\
+\end{longtable}
+\end{landscape}
+
+\section*{Plots and Diagnostics}
+
+Each LMM includes a 4-panel summary: trajectories, random intercepts, Q–Q plot, residuals vs fitted.
+
+\textbf{H1 – EMG p90}\\
+\begin{center}
+\includegraphics[width=0.9\textwidth]{H1\_summary.png}
+\includegraphics[width=0.9\textwidth]{H1\_group\_comparison.png}
+\end{center}
+\textit{Diagnostics: improved normality after log transform; residual variance stabilized.}
+
+\textbf{H2 – Workload}\\
+\begin{center}
+\includegraphics[width=0.9\textwidth]{H2\_summary.png}
+\includegraphics[width=0.9\textwidth]{H2\_group\_comparison.png}
+\end{center}
+\textit{Diagnostics: approximately symmetric residuals; no strong heteroscedasticity.}
+
+\textbf{H3 – Workload → Sitting}\\
+\begin{center}
+\includegraphics[width=0.9\textwidth]{H3\_summary.png}
+\includegraphics[width=0.9\textwidth]{H3\_workload\_vs\_sitting.png}
+\end{center}
+\textit{Diagnostics: logit scale yields acceptable residual structure; mild tail deviation.}
+
+\textbf{H4 – OSPAQ Validation}\\
+\begin{center}
+\includegraphics[width=0.9\textwidth]{H4\_ospaq\_vs\_objective.png}
+\includegraphics[width=0.9\textwidth]{H4\_ols\_diagnostics.png}
+\end{center}
+\textit{Diagnostics: OLS residuals show no strong pattern; normality acceptable for N=38.}
+
+\textbf{H5 – Physiological → EMG (Exploratory)}\\
+\begin{center}
+\includegraphics[width=0.9\textwidth]{H5\_summary.png}
+\includegraphics[width=0.9\textwidth]{H5\_posture\_vs\_emg.png}
+\end{center}
+\textit{Diagnostics: convergence warnings; interpret cautiously.}
+
+\textbf{H6 – Posture}\\
+\begin{center}
+\includegraphics[width=0.9\textwidth]{H6\_summary.png}
+\includegraphics[width=0.9\textwidth]{H6\_group\_comparison.png}
+\end{center}
+\textit{Diagnostics: residuals broadly acceptable.}
+
+\section*{Limitations and Practical Considerations}
+
+\begin{itemize}
+\item Sample size (38 subjects) limits power under strict FWER control
+\item LMMs assume Gaussian residuals on the transformed scale; diagnostics support adequacy but not certainty
+\item EMG p90 can exceed 100\% MVC; logit is invalid for this outcome
+\item H5 is exploratory and relatively complex for the available sample size
+\item H4 is cross-sectional; Bland–Altman could be added if agreement (not only correlation) is desired
+\end{itemize}
+
+\section*{Recommendations for Next Steps}
+
+\begin{itemize}
+\item Provide an FDR sensitivity analysis if a less conservative correction is desired
+\item Consider power analysis for future data collections
+\item Add Bland–Altman analysis for OSPAQ validation if agreement metrics are needed
+\end{itemize}
+
+\end{document}% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+% Scale images if necessary, so that they will not overflow the page
+% margins by default, and it is still possible to overwrite the defaults
+% using explicit options in \includegraphics[width, height, ...]{}
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+% Set default figure placement to htbp
+\makeatletter
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+% ============================================================
+% OH Stats Guide - Professional PDF Styling
+% ============================================================
+
+\usepackage{framed}
+\usepackage{xcolor}
+\usepackage{mdframed}
+\usepackage{fontawesome5}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric,arrows,positioning}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+\usepackage{pdflscape}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{colortbl}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% ============================================================
+% COLOR PALETTE
+% ============================================================
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{200,200,200}
+\definecolor{primaryblue}{RGB}{0,102,204}
+\definecolor{accentgreen}{RGB}{40,167,69}
+\definecolor{warningyellow}{RGB}{255,193,7}
+\definecolor{warningbg}{RGB}{255,250,230}
+\definecolor{dangerred}{RGB}{220,53,69}
+\definecolor{dangerbg}{RGB}{255,235,238}
+\definecolor{infoblue}{RGB}{23,162,184}
+\definecolor{infobg}{RGB}{232,244,248}
+\definecolor{tipgreen}{RGB}{40,167,69}
+\definecolor{tipbg}{RGB}{232,248,232}
+\definecolor{lightgray}{RGB}{245,245,245}
+\definecolor{darkgray}{RGB}{80,80,80}
+\definecolor{headergray}{RGB}{60,60,60}
+
+% ============================================================
+% SECTION STYLING
+% ============================================================
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{primaryblue}}
+  {\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{darkgray}}
+  {\thesubsection}{1em}{}
+\titleformat{\subsubsection}
+  {\normalfont\normalsize\bfseries\color{darkgray}}
+  {\thesubsubsection}{1em}{}
+
+% ============================================================
+% CODE BLOCK STYLING
+% ============================================================
+\makeatletter
+\@ifundefined{Shaded}{
+  \newenvironment{Shaded}{
+    \begin{mdframed}[
+      backgroundcolor=codebg,
+      linecolor=codeframe,
+      linewidth=1pt,
+      topline=true,
+      bottomline=true,
+      leftline=true,
+      rightline=true,
+      innerleftmargin=10pt,
+      innerrightmargin=10pt,
+      innertopmargin=8pt,
+      innerbottommargin=8pt,
+      skipabove=10pt,
+      skipbelow=10pt,
+      roundcorner=3pt
+    ]
+  }{\end{mdframed}}
+}{}
+\makeatother
+
+% Reduce code font size
+\AtBeginEnvironment{Highlighting}{\small}
+
+% ============================================================
+% CALLOUT BOXES
+% ============================================================
+
+% Info box (blue)
+\newtcolorbox{infobox}[1][]{
+  enhanced,
+  breakable,
+  colback=infobg,
+  colframe=infoblue,
+  coltitle=white,
+  fonttitle=\bfseries,
+  title={\faInfoCircle\ #1},
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  boxrule=0pt,
+  leftrule=4pt,
+  arc=2pt
+}
+
+% Warning box (yellow)
+\newtcolorbox{warningbox}[1][]{
+  enhanced,
+  breakable,
+  colback=warningbg,
+  colframe=warningyellow,
+  coltitle=black,
+  fonttitle=\bfseries,
+  title={\faExclamationTriangle\ #1},
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  boxrule=0pt,
+  leftrule=4pt,
+  arc=2pt
+}
+
+% Tip box (green)
+\newtcolorbox{tipbox}[1][]{
+  enhanced,
+  breakable,
+  colback=tipbg,
+  colframe=tipgreen,
+  coltitle=white,
+  fonttitle=\bfseries,
+  title={\faLightbulb\ #1},
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  boxrule=0pt,
+  leftrule=4pt,
+  arc=2pt
+}
+
+% Danger/Important box (red)
+\newtcolorbox{dangerbox}[1][]{
+  enhanced,
+  breakable,
+  colback=dangerbg,
+  colframe=dangerred,
+  coltitle=white,
+  fonttitle=\bfseries,
+  title={\faExclamationCircle\ #1},
+  left=8pt,
+  right=8pt,
+  top=6pt,
+  bottom=6pt,
+  boxrule=0pt,
+  leftrule=4pt,
+  arc=2pt
+}
+
+% ============================================================
+% TABLE STYLING
+% ============================================================
+\renewcommand{\arraystretch}{1.3}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcolumntype{R}[1]{>{\raggedleft\arraybackslash}p{#1}}
+
+% ============================================================
+% HEADER/FOOTER
+% ============================================================
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\textcolor{darkgray}{OH Stats Guide}}
+\fancyhead[R]{\small\textcolor{darkgray}{\thepage}}
+\fancyfoot[C]{\small\textcolor{darkgray}{oh\_stats v0.3.0}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ============================================================
+% QUOTE STYLING (for blockquotes)
+% ============================================================
+\renewenvironment{quote}{
+  \begin{mdframed}[
+    backgroundcolor=lightgray,
+    linecolor=primaryblue,
+    linewidth=0pt,
+    leftline=true,
+    leftmargin=0pt,
+    innerleftmargin=15pt,
+    innerrightmargin=10pt,
+    innertopmargin=8pt,
+    innerbottommargin=8pt,
+    skipabove=10pt,
+    skipbelow=10pt,
+    leftlinewidth=4pt
+  ]
+  \itshape
+}{\end{mdframed}}
+
+% ============================================================
+% MISC
+% ============================================================
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\author{}
+\date{}
+
+\begin{document}
+
+\begin{center}
+\Large\textbf{Occupational Health Toolkit – Statistical Report for Supervisor}\\[0.4em]
+\normalsize February 1, 2026
+\end{center}
+
+\begin{tcolorbox}[colback=infobg, colframe=infoblue, title={\faIcon{info-circle} Purpose}, fonttitle=\bfseries]
+This report documents the statistical workflow, model choices, transformations, assumption checks, multiple-comparison corrections, and results for hypotheses H1–H6. It is a rigorous methods + results + interpretation briefing (not a paper) intended to justify why each model and adjustment was chosen and to summarize outputs with diagnostics.
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{study-design-and-data-structure}{%
+\section{Study Design and Data
+Structure}\label{study-design-and-data-structure}}
+
+\begin{tcolorbox}[colback=tipbg, colframe=tipgreen, title={\faIcon{database} Dataset Summary}, fonttitle=\bfseries]
+\begin{itemize}
+\item Population: 38 office workers (Front-Office vs Back-Office)
+\item Repeated measures: daily observations per subject (\texttt{subject\_id})
+\item Key outcomes: EMG trapezius activity, perceived workload, sitting behavior, postural sway, and self-report sitting (OSPAQ)
+\item Modeling strategy: Linear Mixed Models (LMMs) for repeated measures; OLS for subject-level validation (H4)
+\item Repeated-measures implication: within-subject correlation requires random effects to avoid inflated type-I error
+\end{itemize}
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{hypotheses-and-models-confirmatory-vs-exploratory}{%
+\section{Hypotheses and Models (Confirmatory vs
+Exploratory)}\label{hypotheses-and-models-confirmatory-vs-exploratory}}
+
+All confirmatory models use ML estimation for valid likelihood ratio
+tests (LRT). Day effects are categorical (\texttt{C(day\_index)}),
+avoiding linear-trend assumptions.
+
+\begin{landscape}
+\begin{longtable}{p{3.2cm}p{3.0cm}p{1.6cm}p{7.4cm}p{5.0cm}}
+\textbf{Hypothesis} & \textbf{Outcome} & \textbf{Model} & \textbf{Formula (fixed effects)} & \textbf{Notes} \\
+\hline
+H1 (Confirmatory) & EMG p90 (\%MVC) & LMM & log(EMG p90) ~ \texttt{work\_type} + \texttt{C(day\_index)} & Log transform for skew/heteroscedasticity; EMG p90 not bounded in [0,1] \\
+H2 (Confirmatory) & Workload mean & LMM & \texttt{workload\_mean} ~ \texttt{work\_type} + \texttt{C(day\_index)} & No transform \\
+H3 (Confirmatory) & Sitting proportion & LMM & logit(\texttt{har\_sentado\_prop}) ~ \texttt{workload\_mean} + \texttt{work\_type} + \texttt{C(day\_index)} & Proportion -> logit \\
+H4 (Confirmatory) & OSPAQ validation & OLS & logit(\texttt{har\_sentado\_prop}) ~ \texttt{ospaq\_sitting\_frac} + \texttt{work\_type} & Subject-level aggregation \\
+H5 (Exploratory) & EMG p90 (\%MVC) & LMM & EMG p90 ~ \texttt{hr\_ratio\_mean\_within} + \texttt{hr\_ratio\_mean\_between} + \texttt{noise\_mean\_within} + \texttt{noise\_mean\_between} + \texttt{posture\_95\_confidence\_ellipse\_area\_within} + \texttt{posture\_95\_confidence\_ellipse\_area\_between} + \texttt{work\_type} + \texttt{C(day\_index)} & Within-between decomposition \\
+H6 (Confirmatory) & Posture area ($cm^2$) & LMM & \texttt{posture\_95\_confidence\_ellipse\_area} ~ \texttt{work\_type} + \texttt{C(day\_index)} & No transform \\
+\end{longtable}
+\end{landscape}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{transformations-and-units}{%
+\section{Transformations and Units}\label{transformations-and-units}}
+
+\begin{tcolorbox}[colback=lightgray, colframe=darkgray, title={\faIcon{sliders-h} Transform Summary}, fonttitle=\bfseries]
+\begin{itemize}
+\item EMG p90: %MVC; can exceed 100% -> not a strict proportion; log transform used in H1
+\item Workload mean: questionnaire score; no transform
+\item Sitting proportion: proportion in (0,1); logit transform used in H3 and H4
+\item OSPAQ sitting: proportion in (0,1); predictor, no transform
+\item Posture ellipse area: $cm^2$; no transform
+\item HAR durations: seconds; used for duration-weighted sitting proportion in H4
+\end{itemize}
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{assumption-checks-and-corrections}{%
+\section{Assumption Checks and
+Corrections}\label{assumption-checks-and-corrections}}
+
+\begin{tcolorbox}[colback=warningbg, colframe=warningyellow, title={\faIcon{exclamation-triangle} Diagnostics}, fonttitle=\bfseries]
+\begin{itemize}
+\item Normality: Q–Q plot + Shapiro-Wilk/Jarque-Bera summary
+\item Homoscedasticity: residuals vs fitted + Breusch–Pagan proxy
+\item Outliers: standardized residuals > 3 flagged
+\item Auto-correction: if violations and outcome >= 0, apply log transform and refit
+\item Bootstrap: cluster bootstrap p-values if violations persist and configured
+\end{itemize}
+\end{tcolorbox}
+
+Note: H5 produced convergence warnings (boundary of parameter space),
+retained to avoid masking instability in the exploratory model.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{multiple-comparisons}{%
+\section{Multiple Comparisons}\label{multiple-comparisons}}
+
+Confirmatory family: H1, H2, H3, H4, H6
+
+\begin{tcolorbox}[colback=infobg, colframe=infoblue, title={\faIcon{check-circle} Correction Strategy}, fonttitle=\bfseries]
+Holm step-down procedure (FWER control) applied to the confirmatory family. H5 is exploratory and excluded from correction. Primary p-values are LRT (full vs reduced model); Wald p-values retained for sensitivity.
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{results-estimates-interpretation}{%
+\section{Results: Estimates +
+Interpretation}\label{results-estimates-interpretation}}
+
+\begin{landscape}
+\begin{longtable}{p{2.4cm}p{2.2cm}p{2.8cm}p{3.4cm}p{1.3cm}p{1.3cm}p{1.3cm}p{6.6cm}}
+\textbf{Hypothesis} & \textbf{N\_obs / N\_subjects} & \textbf{Primary term} & \textbf{Estimate (95\% CI)} & \textbf{Wald p} & \textbf{LRT p} & \textbf{Holm p} & \textbf{Interpretation} \\
+\hline
+H1 & 161 / 38 & \texttt{work\_type} & 0.5027 [0.1335, 0.8719] & 0.0076 & 0.0107 & 0.0537 & FO higher than BO on log scale; narrowly misses Holm threshold \\
+H2 & 176 / 38 & \texttt{work\_type} & -0.0176 [-0.3930, 0.3578] & 0.9268 & 0.9268 & 1.0000 & No evidence of FO/BO workload difference \\
+H3 & 168 / 38 & \texttt{workload\_mean} & -0.0505 [-0.1416, 0.0405] & 0.2768 & 0.0431 & 0.1294 & LRT suggests model-level improvement but coefficient not significant; tentative evidence \\
+H4 & 38 / 38 & \texttt{ospaq\_sitting\_frac} & 0.1709 [-0.4316, 0.7734] & 0.5684 & — & 1.0000 & No evidence of strong self-report vs objective association \\
+H5 (Expl.) & 160 / 38 & \texttt{posture\_within} & 0.0041 [-0.0834, 0.0916] & 0.9266 & 0.9266 & — & No within-day posture–EMG association; exploratory with convergence warnings \\
+H6 & 180 / 38 & \texttt{work\_type} & -0.1482 [-0.2660, -0.0305] & 0.0136 & 0.0174 & 0.0698 & Suggestive FO/BO difference; not confirmatory under Holm \\
+\end{longtable}
+\end{landscape}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{plots-and-diagnostics}{%
+\section{Plots and Diagnostics}\label{plots-and-diagnostics}}
+
+Each LMM includes a 4-panel summary: trajectories, random intercepts,
+Q--Q plot, residuals vs fitted.
+
+\textbf{H1 – EMG p90}\textbackslash{}
+\includegraphics{../plots/hypotheses/H1_summary.png}
+\includegraphics{../plots/hypotheses/H1_group_comparison.png}
+\textit{Diagnostics: improved normality after log transform; residual variance stabilized.}
+
+\textbf{H2 – Workload}\textbackslash{}
+\includegraphics{../plots/hypotheses/H2_summary.png}
+\includegraphics{../plots/hypotheses/H2_group_comparison.png}
+\textit{Diagnostics: approximately symmetric residuals; no strong heteroscedasticity.}
+
+\textbf{H3 – Workload → Sitting}\textbackslash{}
+\includegraphics{../plots/hypotheses/H3_summary.png}
+\includegraphics{../plots/hypotheses/H3_workload_vs_sitting.png}
+\textit{Diagnostics: logit scale yields acceptable residual structure; mild tail deviation.}
+
+\textbf{H4 – OSPAQ Validation}\textbackslash{}
+\includegraphics{../plots/hypotheses/H4_ospaq_vs_objective.png}
+\includegraphics{../plots/hypotheses/H4_ols_diagnostics.png}
+\textit{Diagnostics: OLS residuals show no strong pattern; normality acceptable for N=38.}
+
+\textbf{H5 – Physiological → EMG (Exploratory)}\textbackslash{}
+\includegraphics{../plots/hypotheses/H5_summary.png}
+\includegraphics{../plots/hypotheses/H5_posture_vs_emg.png}
+\textit{Diagnostics: convergence warnings; interpret cautiously.}
+
+\textbf{H6 – Posture}\textbackslash{}
+\includegraphics{../plots/hypotheses/H6_summary.png}
+\includegraphics{../plots/hypotheses/H6_group_comparison.png}
+\textit{Diagnostics: residuals broadly acceptable.}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{limitations-and-practical-considerations}{%
+\section{Limitations and Practical
+Considerations}\label{limitations-and-practical-considerations}}
+
+\begin{itemize}
+\item Sample size (38 subjects) limits power under strict FWER control
+\item LMMs assume Gaussian residuals on the transformed scale; diagnostics support adequacy but not certainty
+\item EMG p90 can exceed 100% MVC; logit is invalid for this outcome
+\item H5 is exploratory and relatively complex for the available sample size
+\item H4 is cross-sectional; Bland–Altman could be added if agreement (not only correlation) is desired
+\end{itemize}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{recommendations-for-next-steps}{%
+\section{Recommendations for Next
+Steps}\label{recommendations-for-next-steps}}
+
+\begin{itemize}
+\item Provide an FDR sensitivity analysis if a less conservative correction is desired
+\item Consider power analysis for future data collections
+\item Add Bland–Altman analysis for OSPAQ validation if agreement metrics are needed
+\end{itemize}\begin{center}
+\Large\textbf{Occupational Health Toolkit – Statistical Report for Supervisor}\\[0.4em]
+\normalsize February 1, 2026
+\end{center}
+
+\begin{tcolorbox}[colback=infobg, colframe=infoblue, title={\faIcon{info-circle} Purpose}, fonttitle=\bfseries]
+This report documents the statistical workflow, model choices, transformations, assumption checks, multiple-comparison corrections, and results for hypotheses H1–H6. It is a rigorous methods + results + interpretation briefing (not a paper) intended to justify why each model and adjustment was chosen and to summarize outputs with diagnostics.
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{study-design-and-data-structure-1}{%
+\section{Study Design and Data
+Structure}\label{study-design-and-data-structure-1}}
+
+\begin{tcolorbox}[colback=tipbg, colframe=tipgreen, title={\faIcon{database} Dataset Summary}, fonttitle=\bfseries]
+\begin{itemize}
+\item Population: 38 office workers (Front-Office vs Back-Office)
+\item Repeated measures: daily observations per subject (\texttt{subject\_id})
+\item Key outcomes: EMG trapezius activity, perceived workload, sitting behavior, postural sway, and self-report sitting (OSPAQ)
+\item Modeling strategy: Linear Mixed Models (LMMs) for repeated measures; OLS for subject-level validation (H4)
+\item Repeated-measures implication: within-subject correlation requires random effects to avoid inflated type-I error
+\end{itemize}
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{hypotheses-and-models-confirmatory-vs-exploratory-1}{%
+\section{Hypotheses and Models (Confirmatory vs
+Exploratory)}\label{hypotheses-and-models-confirmatory-vs-exploratory-1}}
+
+All confirmatory models use ML estimation for valid likelihood ratio
+tests (LRT). Day effects are categorical (\texttt{C(day\_index)}),
+avoiding linear-trend assumptions.
+
+\begin{landscape}
+\begin{longtable}{p{3.2cm}p{3.0cm}p{1.6cm}p{7.4cm}p{5.0cm}}
+    extbf{Hypothesis} & \textbf{Outcome} & \textbf{Model} & \textbf{Formula (fixed effects)} & \textbf{Notes} \\
+\hline
+H1 (Confirmatory) & EMG p90 (%MVC) & LMM & log(EMG p90) ~ \texttt{work\_type} + \texttt{C(day\_index)} & Log transform for skew/heteroscedasticity; EMG p90 not bounded in [0,1] \\
+H2 (Confirmatory) & Workload mean & LMM & \texttt{workload\_mean} ~ \texttt{work\_type} + \texttt{C(day\_index)} & No transform \\
+H3 (Confirmatory) & Sitting proportion & LMM & logit(\texttt{har\_sentado\_prop}) ~ \texttt{workload\_mean} + \texttt{work\_type} + \texttt{C(day\_index)} & Proportion -> logit \\
+H4 (Confirmatory) & OSPAQ validation & OLS & logit(\texttt{har\_sentado\_prop}) ~ \texttt{ospaq\_sitting\_frac} + \texttt{work\_type} & Subject-level aggregation \\
+H5 (Exploratory) & EMG p90 (%MVC) & LMM & EMG p90 ~ \texttt{hr\_ratio\_mean\_within} + \texttt{hr\_ratio\_mean\_between} + \texttt{noise\_mean\_within} + \texttt{noise\_mean\_between} + \texttt{posture\_95\_confidence\_ellipse\_area\_within} + \texttt{posture\_95\_confidence\_ellipse\_area\_between} + \texttt{work\_type} + \texttt{C(day\_index)} & Within-between decomposition \\
+H6 (Confirmatory) & Posture area ($cm^2$) & LMM & \texttt{posture\_95\_confidence\_ellipse\_area} ~ \texttt{work\_type} + \texttt{C(day\_index)} & No transform \\
+\end{longtable}
+\end{landscape}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{transformations-and-units-1}{%
+\section{Transformations and Units}\label{transformations-and-units-1}}
+
+\begin{tcolorbox}[colback=lightgray, colframe=darkgray, title={\faIcon{sliders-h} Transform Summary}, fonttitle=\bfseries]
+\begin{itemize}
+\item EMG p90: %MVC; can exceed 100% -> not a strict proportion; log transform used in H1
+\item Workload mean: questionnaire score; no transform
+\item Sitting proportion: proportion in (0,1); logit transform used in H3 and H4
+\item OSPAQ sitting: proportion in (0,1); predictor, no transform
+\item Posture ellipse area: $cm^2$; no transform
+\item HAR durations: seconds; used for duration-weighted sitting proportion in H4
+\end{itemize}
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{assumption-checks-and-corrections-1}{%
+\section{Assumption Checks and
+Corrections}\label{assumption-checks-and-corrections-1}}
+
+\begin{tcolorbox}[colback=warningbg, colframe=warningyellow, title={\faIcon{exclamation-triangle} Diagnostics}, fonttitle=\bfseries]
+\begin{itemize}
+\item Normality: Q–Q plot + Shapiro-Wilk/Jarque-Bera summary
+\item Homoscedasticity: residuals vs fitted + Breusch–Pagan proxy
+\item Outliers: standardized residuals > 3 flagged
+\item Auto-correction: if violations and outcome >= 0, apply log transform and refit
+\item Bootstrap: cluster bootstrap p-values if violations persist and configured
+\end{itemize}
+\end{tcolorbox}
+
+Note: H5 produced convergence warnings (boundary of parameter space),
+retained to avoid masking instability in the exploratory model.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{multiple-comparisons-1}{%
+\section{Multiple Comparisons}\label{multiple-comparisons-1}}
+
+Confirmatory family: H1, H2, H3, H4, H6
+
+\begin{tcolorbox}[colback=infobg, colframe=infoblue, title={\faIcon{check-circle} Correction Strategy}, fonttitle=\bfseries]
+Holm step-down procedure (FWER control) applied to the confirmatory family. H5 is exploratory and excluded from correction. Primary p-values are LRT (full vs reduced model); Wald p-values retained for sensitivity.
+\end{tcolorbox}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{results-estimates-interpretation-1}{%
+\section{Results: Estimates +
+Interpretation}\label{results-estimates-interpretation-1}}
+
+\begin{landscape}
+\begin{longtable}{p{2.4cm}p{2.2cm}p{2.8cm}p{3.4cm}p{1.3cm}p{1.3cm}p{1.3cm}p{6.6cm}}
+    extbf{Hypothesis} & \textbf{N\_obs / N\_subjects} & \textbf{Primary term} & \textbf{Estimate (95\% CI)} & \textbf{Wald p} & \textbf{LRT p} & \textbf{Holm p} & \textbf{Interpretation} \\
+\hline
+H1 & 161 / 38 & \texttt{work\_type} & 0.5027 [0.1335, 0.8719] & 0.0076 & 0.0107 & 0.0537 & FO higher than BO on log scale; narrowly misses Holm threshold \\
+H2 & 176 / 38 & \texttt{work\_type} & -0.0176 [-0.3930, 0.3578] & 0.9268 & 0.9268 & 1.0000 & No evidence of FO/BO workload difference \\
+H3 & 168 / 38 & \texttt{workload\_mean} & -0.0505 [-0.1416, 0.0405] & 0.2768 & 0.0431 & 0.1294 & LRT suggests model-level improvement but coefficient not significant; tentative evidence \\
+H4 & 38 / 38 & \texttt{ospaq\_sitting\_frac} & 0.1709 [-0.4316, 0.7734] & 0.5684 & — & 1.0000 & No evidence of strong self-report vs objective association \\
+H5 (Expl.) & 160 / 38 & \texttt{posture\_within} & 0.0041 [-0.0834, 0.0916] & 0.9266 & 0.9266 & — & No within-day posture–EMG association; exploratory with convergence warnings \\
+H6 & 180 / 38 & \texttt{work\_type} & -0.1482 [-0.2660, -0.0305] & 0.0136 & 0.0174 & 0.0698 & Suggestive FO/BO difference; not confirmatory under Holm \\
+\end{longtable}
+\end{landscape}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{plots-and-diagnostics-1}{%
+\section{Plots and Diagnostics}\label{plots-and-diagnostics-1}}
+
+Each LMM includes a 4-panel summary: trajectories, random intercepts,
+Q--Q plot, residuals vs fitted.
+
+\begin{verbatim}
+extbf{H1 – EMG p90}\\
+\end{verbatim}
+
+\includegraphics{../plots/hypotheses/H1_summary.png}
+\includegraphics{../plots/hypotheses/H1_group_comparison.png}
+extit\{Diagnostics: improved normality after log transform; residual
+variance stabilized.\}
+
+\begin{verbatim}
+extbf{H2 – Workload}\\
+\end{verbatim}
+
+\includegraphics{../plots/hypotheses/H2_summary.png}
+\includegraphics{../plots/hypotheses/H2_group_comparison.png}
+extit\{Diagnostics: approximately symmetric residuals; no strong
+heteroscedasticity.\}
+
+\begin{verbatim}
+extbf{H3 – Workload → Sitting}\\
+\end{verbatim}
+
+\includegraphics{../plots/hypotheses/H3_summary.png}
+\includegraphics{../plots/hypotheses/H3_workload_vs_sitting.png}
+extit\{Diagnostics: logit scale yields acceptable residual structure;
+mild tail deviation.\}
+
+\begin{verbatim}
+extbf{H4 – OSPAQ Validation}\\
+\end{verbatim}
+
+\includegraphics{../plots/hypotheses/H4_ospaq_vs_objective.png}
+\includegraphics{../plots/hypotheses/H4_ols_diagnostics.png}
+extit\{Diagnostics: OLS residuals show no strong pattern; normality
+acceptable for N=38.\}
+
+\begin{verbatim}
+extbf{H5 – Physiological → EMG (Exploratory)}\\
+\end{verbatim}
+
+\includegraphics{../plots/hypotheses/H5_summary.png}
+\includegraphics{../plots/hypotheses/H5_posture_vs_emg.png}
+extit\{Diagnostics: convergence warnings; interpret cautiously.\}
+
+\begin{verbatim}
+extbf{H6 – Posture}\\
+\end{verbatim}
+
+\includegraphics{../plots/hypotheses/H6_summary.png}
+\includegraphics{../plots/hypotheses/H6_group_comparison.png}
+extit\{Diagnostics: residuals broadly acceptable.\}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{limitations-and-practical-considerations-1}{%
+\section{Limitations and Practical
+Considerations}\label{limitations-and-practical-considerations-1}}
+
+\begin{itemize}
+\item Sample size (38 subjects) limits power under strict FWER control
+\item LMMs assume Gaussian residuals on the transformed scale; diagnostics support adequacy but not certainty
+\item EMG p90 can exceed 100% MVC; logit is invalid for this outcome
+\item H5 is exploratory and relatively complex for the available sample size
+\item H4 is cross-sectional; Bland–Altman could be added if agreement (not only correlation) is desired
+\end{itemize}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\hypertarget{recommendations-for-next-steps-1}{%
+\section{Recommendations for Next
+Steps}\label{recommendations-for-next-steps-1}}
+
+\begin{itemize}
+\item Provide an FDR sensitivity analysis if a less conservative correction is desired
+\item Consider power analysis for future data collections
+\item Add Bland–Altman analysis for OSPAQ validation if agreement metrics are needed
+\end{itemize}
+
+\end{document}

@@ -6,7 +6,7 @@ A multilevel inference engine for Occupational Health profile data.
 Designed to work with oh_parser output and support heterogeneous outcome types.
 
 Architecture Note:
-    This package uses dictionaries (TypedDicts) instead of classes for data 
+    This package uses plain dictionaries instead of classes for data 
     structures to maintain consistency with the oh_parser project style.
     All data containers are plain Python dicts with documented keys.
 
@@ -41,7 +41,7 @@ from __future__ import annotations
 
 __version__ = "0.3.0"
 
-# Registry - Enums and TypedDicts
+# Registry - Constants and dicts
 from .registry import (
     OutcomeType,
     AnalysisLevel,
@@ -63,7 +63,7 @@ from .registry import (
     reset_registry,
 )
 
-# Data preparation - TypedDict and helper functions
+# Data preparation - dicts and helper functions
 from .prepare import (
     AnalysisDataset,
     create_analysis_dataset,
@@ -112,7 +112,7 @@ from .descriptive import (
     print_missingness_summary,
 )
 
-# Linear Mixed Models - TypedDict and functions
+# Linear Mixed Models - dicts and functions
 from .lmm import (
     LMMResult,
     create_lmm_result,
@@ -126,7 +126,7 @@ from .lmm import (
     compare_models,
 )
 
-# Post-hoc comparisons - TypedDict and functions
+# Post-hoc comparisons - dicts and functions
 from .posthoc import (
     ContrastResult,
     create_contrast_result,
@@ -148,7 +148,7 @@ from .multiplicity import (
     fdr_summary,
 )
 
-# Diagnostics - TypedDict and functions
+# Diagnostics - dicts and functions
 from .diagnostics import (
     DiagnosticsResult,
     create_diagnostics_result,
@@ -171,6 +171,17 @@ from .report import (
     print_coefficient_summary,
 )
 
+# Plotting / Visualization
+from .plotting import (
+    plot_lmm_trajectories,
+    plot_lmm_fit,
+    plot_random_intercepts,
+    plot_model_diagnostics,
+    plot_group_comparison,
+    create_lmm_summary_figure,
+    GROUP_COLORS,
+)
+
 __all__ = [
     # Version
     "__version__",
@@ -180,7 +191,7 @@ __all__ = [
     "AnalysisLevel", 
     "TransformType",
     
-    # Registry - TypedDict and functions
+    # Registry - dicts and functions
     "OutcomeInfo",
     "create_outcome_info",
     "OUTCOME_REGISTRY",
@@ -197,7 +208,7 @@ __all__ = [
     "get_single_instance_outcomes",
     "reset_registry",
     
-    # Prepare - TypedDict and functions
+    # Prepare - dicts and functions
     "AnalysisDataset",
     "create_analysis_dataset",
     "validate_dataset",
@@ -232,7 +243,7 @@ __all__ = [
     "align_sensor_questionnaire",
     "parse_date",
     
-    # Descriptive - TypedDicts and functions
+    # Descriptive - dicts and functions
     "NormalityResult",
     "VarianceCheckResult",
     "summarize_outcomes",
@@ -242,7 +253,7 @@ __all__ = [
     "missingness_report",
     "print_missingness_summary",
     
-    # LMM - TypedDict and functions
+    # LMM - dicts and functions
     "LMMResult",
     "create_lmm_result",
     "summarize_lmm_result",
@@ -254,7 +265,7 @@ __all__ = [
     "get_random_effects",
     "compare_models",
     
-    # Post-hoc - TypedDict and functions
+    # Post-hoc - dicts and functions
     "ContrastResult",
     "create_contrast_result",
     "summarize_contrast_result",
@@ -272,7 +283,7 @@ __all__ = [
     "significant_outcomes",
     "fdr_summary",
     
-    # Diagnostics - TypedDict and functions
+    # Diagnostics - dicts and functions
     "DiagnosticsResult",
     "create_diagnostics_result",
     "summarize_diagnostics",
@@ -290,4 +301,13 @@ __all__ = [
     "export_to_latex",
     "print_results_summary",
     "print_coefficient_summary",
+    
+    # Plotting / Visualization
+    "plot_lmm_trajectories",
+    "plot_lmm_fit",
+    "plot_random_intercepts",
+    "plot_model_diagnostics",
+    "plot_group_comparison",
+    "create_lmm_summary_figure",
+    "GROUP_COLORS",
 ]

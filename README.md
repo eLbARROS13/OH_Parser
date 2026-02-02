@@ -58,6 +58,36 @@ report = results_summary(results, fdr)
 print(report)
 ```
 
+## Hypotheses + Reports + Plots
+
+This repository provides two entry points for hypothesis testing:
+
+- **run_hypotheses.py**: production runner for the preregistered H1–H6 suite. Uses the shared hypotheses engine and applies Holm correction to the confirmatory set.
+- **testing_stats.py**: step-by-step, verbose tutorial workflow that runs data discovery, QA checks, LMM examples, reporting, and then calls the same H1–H6 runner.
+
+### Run H1–H6 only (production)
+
+```bash
+python run_hypotheses.py
+```
+
+### Run full step-by-step workflow
+
+```bash
+python testing_stats.py
+```
+
+### Generate plots for the supervisor report
+
+```bash
+python generate_plots.py
+```
+
+Outputs:
+- Plots: `plots/hypotheses/`
+- Supervisor report (Markdown): `docs/OH_SUPERVISOR_REPORT.md`
+- Supervisor report (LaTeX/PDF): `docs/OH_SUPERVISOR_REPORT.tex` / `docs/OH_SUPERVISOR_REPORT.pdf`
+
 ## Packages
 
 ### oh_parser
@@ -118,6 +148,13 @@ OH_Toolkit/
 │   ├── OH_PARSER_DOCUMENTATION.pdf
 │   ├── OH_STATS_GUIDE.md
 │   └── OH_STATS_GUIDE.pdf
+│   ├── OH_SUPERVISOR_REPORT.md
+│   ├── OH_SUPERVISOR_REPORT.tex
+│   └── OH_SUPERVISOR_REPORT.pdf
+├── plots/                        # Generated figures
+│   └── hypotheses/
+├── run_hypotheses.py             # H1–H6 runner (production)
+├── generate_plots.py             # Plot generation for reports
 ├── testing_parser.py             # Parser tests
 └── testing_stats.py              # Stats pipeline demo
 ```

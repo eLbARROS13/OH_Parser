@@ -17,7 +17,7 @@ Key functions:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, Optional, Tuple
 import warnings
 
 import numpy as np
@@ -130,17 +130,7 @@ def _compute_stats(df: pd.DataFrame, outcomes: List[str]) -> pd.DataFrame:
 # Normality Assessment
 # =============================================================================
 
-class NormalityResult(TypedDict, total=False):
-    """Result of normality assessment for an outcome."""
-    outcome: str
-    n: int
-    shapiro_stat: float
-    shapiro_p: float
-    skewness: float
-    kurtosis: float
-    is_normal: Optional[bool]  # Based on Shapiro-Wilk p > 0.05
-    recommended_transform: str
-    notes: str
+NormalityResult = Dict[str, Any]
 
 
 def check_normality(
@@ -235,7 +225,7 @@ def check_normality(
             "skewness": skew,
             "kurtosis": kurt,
             "is_normal": is_normal,
-            "recommended_transform": recommended.name if isinstance(recommended, TransformType) else str(recommended),
+            "recommended_transform": str(recommended),
             "notes": notes,
         })
     
@@ -246,16 +236,7 @@ def check_normality(
 # Variance Checks (Degenerate Outcome Detection)
 # =============================================================================
 
-class VarianceCheckResult(TypedDict, total=False):
-    """Result of variance check for an outcome."""
-    outcome: str
-    n: int
-    n_unique: int
-    std: float
-    cv: float
-    pct_mode: float  # Percentage at the modal value
-    is_degenerate: bool
-    reason: str
+VarianceCheckResult = Dict[str, Any]
 
 
 def check_variance(
